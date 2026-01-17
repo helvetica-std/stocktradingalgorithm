@@ -31,40 +31,65 @@ config = {
     },
     "model": {
         "input_size": 5,
-        "num_lstm_layers": 2,
-        "lstm_size": 32,
-        "dropout": 0.4,  # Even more dropout
+        "num_lstm_layers": 2,  # Balanced depth
+        "lstm_size": 48,  # Moderate hidden size
+        "dropout": 0.3,  # Balanced dropout
+        "use_attention": False,  # Disable attention for speed (can enable later)
     },
     "training": {
         "device": "cpu",
-        "batch_size": 32,
-        "num_epoch": 60,
-        "learning_rate": 0.0005,  # Even lower LR
+        "batch_size": 64,  # Larger batch for faster training
+        "num_epoch": 80,  # Reasonable number of epochs
+        "learning_rate": 0.001,  # Good learning rate
         "scheduler_step_size": 25,
-        "weight_decay": 1e-4,  # Stronger L2
-        "use_class_weights": True,  # NEW: Balance UP/DOWN
+        "weight_decay": 1e-5,  # Moderate L2
+        "use_class_weights": True,  # Balance UP/DOWN
     }
 }
 
 def create_features(data):
-    """Create simplified but robust features"""
+    """Create enhanced features for better prediction"""
     df = pd.DataFrame()
     
+    # Price-based features
     df['returns'] = data['Close'].pct_change()
+    df['log_returns'] = np.log(data['Close'] / data['Close'].shift(1))
     df['volatility'] = df['returns'].rolling(10).std()
-    df['momentum'] = data['Close'].pct_change(5)
-    df['volume_change'] = data['Volume'].pct_change()
+    df['momentum_5'] = data['Close'].pct_change(5)
+    df['momentum_10'] = data['Close'].pct_change(10)
     
+    # Moving averages
     ma20 = data['Close'].rolling(20).mean()
+    ma50 = data['Close'].rolling(50).mean()
     df['price_to_ma20'] = (data['Close'] - ma20) / ma20
+    df['price_to_ma50'] = (data['Close'] - ma50) / ma50
+    df['ma20_to_ma50'] = (ma20 - ma50) / ma50
+    
+    # Volume features
+    df['volume_change'] = data['Volume'].pct_change()
+    df['volume_ma'] = data['Volume'].rolling(20).mean()
+    df['volume_ratio'] = data['Volume'] / df['volume_ma']
+    
+    # Price range features
+    df['high_low_ratio'] = (data['High'] - data['Low']) / data['Close']
+    df['close_position'] = (data['Close'] - data['Low']) / (data['High'] - data['Low'] + 1e-8)
+    
+    # RSI-like momentum
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-8)
+    df['rsi'] = 100 - (100 / (1 + rs))
+    df['rsi_normalized'] = (df['rsi'] - 50) / 50  # Normalize to [-1, 1]
     
     df = df.fillna(0)
     
-    # Clip outliers
+    # Clip outliers more aggressively
     for col in df.columns:
         mean = df[col].mean()
         std = df[col].std()
-        df[col] = df[col].clip(mean - 3*std, mean + 3*std)
+        if std > 0:
+            df[col] = df[col].clip(mean - 3*std, mean + 3*std)
     
     return df
 
@@ -216,18 +241,47 @@ else:
 
 val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=0)
 
+class AttentionLayer(nn.Module):
+    """Simple attention mechanism"""
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.attention = nn.Linear(hidden_size, 1)
+        
+    def forward(self, lstm_out):
+        # lstm_out shape: (batch, seq_len, hidden_size)
+        attention_weights = torch.softmax(self.attention(lstm_out), dim=1)
+        attended = torch.sum(attention_weights * lstm_out, dim=1)
+        return attended
+
 class LSTMModel(nn.Module):
-    def __init__(self, input_size=1, hidden_layer_size=32, num_layers=2, output_size=1, dropout=0.2):
+    def __init__(self, input_size=1, hidden_layer_size=32, num_layers=2, output_size=1, dropout=0.2, use_attention=False):
         super().__init__()
         self.hidden_layer_size = hidden_layer_size
+        self.use_attention = use_attention
 
-        self.lstm = nn.LSTM(input_size, hidden_size=self.hidden_layer_size, num_layers=num_layers,
-                            batch_first=True, dropout=dropout if num_layers > 1 else 0)
+        # Input projection layer
+        self.input_proj = nn.Linear(input_size, hidden_layer_size)
+        
+        # LSTM layers
+        self.lstm = nn.LSTM(hidden_layer_size, hidden_size=hidden_layer_size, num_layers=num_layers,
+                            batch_first=True, dropout=dropout if num_layers > 1 else 0, bidirectional=False)
+        
+        # Attention mechanism
+        if use_attention:
+            self.attention = AttentionLayer(hidden_layer_size)
+            lstm_output_size = hidden_layer_size
+        else:
+            lstm_output_size = hidden_layer_size * num_layers  # Use all layers
+        
         self.dropout = nn.Dropout(dropout)
         
-        # Add batch normalization to help with training stability
-        self.bn = nn.BatchNorm1d(hidden_layer_size)
-        self.linear = nn.Linear(hidden_layer_size, output_size)
+        # Multi-layer decoder (simplified for speed)
+        self.decoder = nn.Sequential(
+            nn.Linear(lstm_output_size, hidden_layer_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_layer_size, output_size)
+        )
 
         self.init_weights()
 
@@ -239,25 +293,35 @@ class LSTMModel(nn.Module):
                 nn.init.kaiming_normal_(param)
             elif 'weight_hh' in name:
                 nn.init.orthogonal_(param)
+        
+        # Initialize decoder weights
+        for module in self.decoder:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
 
     def forward(self, x):
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        x = h_n[-1]
+        # Input projection
+        x = self.input_proj(x)
         
-        # Only apply batch norm during training with batch size > 1
-        # Batch norm requires batch size > 1, so skip if batch size is 1
-        if self.training and x.shape[0] > 1:
-            try:
-                x = self.bn(x)
-            except RuntimeError:
-                # Skip batch norm if it fails (e.g., batch size 1)
-                pass
+        # LSTM forward pass
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        
+        # Use attention or concatenate all layer outputs
+        if self.use_attention:
+            x = self.attention(lstm_out)
+        else:
+            # Use last hidden state from all layers (more efficient than full sequence)
+            # h_n shape: (num_layers, batch_size, hidden_size)
+            batch_size = h_n.shape[1]
+            x = h_n.permute(1, 0, 2).reshape(batch_size, -1)
         
         x = self.dropout(x)
-        predictions = self.linear(x)
+        predictions = self.decoder(x)
         return predictions.squeeze()
 
-def run_epoch(dataloader, is_training=False):
+def run_epoch(dataloader, is_training=False, show_progress=False):
     epoch_loss = 0
     num_batches = len(dataloader)
 
@@ -286,17 +350,38 @@ def run_epoch(dataloader, is_training=False):
                 optimizer.step()
 
             epoch_loss += (loss.detach().item() / batchsize)
+            
+            # Show progress every 10 batches or on last batch
+            if show_progress and (idx % 10 == 0 or idx == num_batches - 1):
+                print(f"Batch {idx+1}/{num_batches}", end=' ', flush=True)
         except Exception as e:
             print(f"\nError in batch {idx+1}/{num_batches}: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
     lr = scheduler.get_last_lr()[0]
 
     return epoch_loss, lr
 
-model = LSTMModel(input_size=config["model"]["input_size"], hidden_layer_size=config["model"]["lstm_size"],
-                  num_layers=config["model"]["num_lstm_layers"], output_size=1, dropout=config["model"]["dropout"])
+model = LSTMModel(input_size=config["model"]["input_size"], 
+                  hidden_layer_size=config["model"]["lstm_size"],
+                  num_layers=config["model"]["num_lstm_layers"], 
+                  output_size=1, 
+                  dropout=config["model"]["dropout"],
+                  use_attention=config["model"]["use_attention"])
 model = model.to(config["training"]["device"])
+
+# Print model architecture
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"\nModel Architecture:")
+print(f"  Input size: {config['model']['input_size']}")
+print(f"  LSTM layers: {config['model']['num_lstm_layers']}")
+print(f"  Hidden size: {config['model']['lstm_size']}")
+print(f"  Attention: {config['model']['use_attention']}")
+print(f"  Total parameters: {total_params:,}")
+print(f"  Trainable parameters: {trainable_params:,}")
 
 criterion = nn.HuberLoss(delta=0.01)
 optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"], 
@@ -312,10 +397,10 @@ patience = 15
 patience_counter = 0
 
 for epoch in range(config["training"]["num_epoch"]):
-    print(f"Epoch {epoch+1}/{config['training']['num_epoch']} - Training...", end=' ', flush=True)
-    loss_train, lr_train = run_epoch(train_dataloader, is_training=True)
+    print(f"\nEpoch {epoch+1}/{config['training']['num_epoch']} - Training...", end=' ', flush=True)
+    loss_train, lr_train = run_epoch(train_dataloader, is_training=True, show_progress=(epoch % 5 == 0))
     print("Done. Validating...", end=' ', flush=True)
-    loss_val, lr_val = run_epoch(val_dataloader)
+    loss_val, lr_val = run_epoch(val_dataloader, show_progress=False)
     print("Done.")
     scheduler.step()
     
@@ -461,7 +546,12 @@ model.eval()
 x = torch.tensor(data_x_unseen).float().to(config["training"]["device"]).unsqueeze(0)  # [batch, sequence, features]
 with torch.no_grad():
     predicted_return = model(x)
-predicted_return = predicted_return.cpu().detach().numpy()[0]
+predicted_return = predicted_return.cpu().detach().numpy()
+# Handle both scalar and array cases
+if predicted_return.ndim == 0:
+    predicted_return = float(predicted_return)
+else:
+    predicted_return = float(predicted_return[0])
 
 # Convert return to price
 last_price = data_close_price[-1]
@@ -502,7 +592,12 @@ for day in range(trading_days_in_month):
     x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0)
     with torch.no_grad():
         predicted_return = model(x)
-    predicted_return_value = predicted_return.cpu().detach().numpy()[0]
+    predicted_return_np = predicted_return.cpu().detach().numpy()
+    # Handle both scalar and array cases
+    if predicted_return_np.ndim == 0:
+        predicted_return_value = float(predicted_return_np)
+    else:
+        predicted_return_value = float(predicted_return_np[0])
     predicted_returns.append(predicted_return_value)
     
     # Calculate next price from return
