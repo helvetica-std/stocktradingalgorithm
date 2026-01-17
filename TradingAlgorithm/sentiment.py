@@ -24,7 +24,7 @@ warnings.filterwarnings('ignore')
 print("Core libraries loaded")
 
 config = {
-    "data": {"window_size": 20, "train_split_size": 0.80, "symbol": "IBM", "period": "max"},
+    "data": {"window_size": 20, "train_split_size": 0.80, "symbol": "AAPL", "period": "max"},
     "plots": {"xticks_interval": 90, "color_actual": "#001f3f", "color_train": "#3D9970", 
               "color_val": "#0074D9", "color_pred_train": "#3D9970", "color_pred_val": "#0074D9", 
               "color_pred_test": "#FF4136"},
@@ -533,7 +533,7 @@ metrics_df = pd.DataFrame({
     'Validation': [val_metrics['MAE'], val_metrics['MAPE'], val_metrics['RMSE'], 
                    val_metrics['R2'], val_metrics['Direction_Accuracy'], val_metrics['MPE']]
 })
-metrics_df.to_csv('model_metrics.csv', index=False)
+metrics_df.to_csv('sentiment_model_metrics.csv', index=False)
 
 pd.DataFrame({
     'Next_Day_Price': [next_day_price],
@@ -544,7 +544,7 @@ pd.DataFrame({
     'Direction': ['up' if next_day_price > data_close_price[-1] else 'down'],
     'Model_MAPE': [val_metrics['MAPE']],
     'Model_Direction_Accuracy': [val_metrics['Direction_Accuracy']]
-}).to_csv('next_day_prediction.csv', index=False)
+}).to_csv('sentiment_next_day_prediction.csv', index=False)
 
 print("✓ Results saved:")
 print("  • predictions_with_sentiment.csv (detailed predictions)")
