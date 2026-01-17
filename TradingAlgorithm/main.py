@@ -6,128 +6,120 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import root_mean_squared_error
 
-# 1. SETUP DEVICE AND PATHS
+# 1. SETUP
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'Using device: {device}')
-
-
-MODEL_PATH = r'C:\Users\sed35\OneDrive\Desktop\Programming Folders\Trading Predictions\stocktradingalgorithm\TradingAlgorithm\tradingmodel.pth'
-
-
+MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgorithm\model_pro.pth'
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
-# 2. DATA PREPARATION
-ticker = 'AAPL'
-df = yf.download(ticker, start='2020-01-01')
+# 2. DATA PREPARATION (Adding Market Context)
+ticker = input("Enter stock ticker (e.g., AAPL): ").upper()
+# Get AAPL and S&P 500
+data = yf.download([ticker, '^GSPC'], start='2000-01-01')['Close']
 
-scaler = StandardScaler()
-df_scaled = scaler.fit_transform(df[['Close']])
+# Monthly Resample
+df_monthly = data.resample('ME').last()
 
-seq_length = 60
-data_x = []
-data_y = []
+# Feature 1: AAPL Log Returns
+df_features = pd.DataFrame(index=df_monthly.index)
+df_features['AAPL_Returns'] = np.log(df_monthly[ticker] / df_monthly[ticker].shift(1))
 
-for i in range(len(df_scaled) - seq_length):
-    data_x.append(df_scaled[i : i + seq_length - 1]) 
-    data_y.append(df_scaled[i + seq_length - 1])     
+# Feature 2: S&P 500 Log Returns (Market Context)
+df_features['Market_Returns'] = np.log(df_monthly['^GSPC'] / df_monthly['^GSPC'].shift(1))
 
-data_x = np.array(data_x)
-data_y = np.array(data_y)
+# Feature 3: Trend (Price vs 12-Month Moving Average)
+ma12 = df_monthly[ticker].rolling(window=12).mean()
+df_features['Trend'] = (df_monthly[ticker] - ma12) / ma12
 
-train_size = int(0.8 * len(data_x))
+# Feature 4 & 5: Volume and Volatility
+df_daily = yf.download(ticker, start='2000-01-01')
+df_features['Vol_Change'] = df_daily['Volume'].resample('ME').sum().pct_change()
+df_features['Range'] = ((df_daily['High'] - df_daily['Low']) / df_daily['Close']).resample('ME').mean()
 
-X_train = torch.from_numpy(data_x[:train_size]).type(torch.Tensor).to(device)
-y_train = torch.from_numpy(data_y[:train_size]).type(torch.Tensor).to(device)
-X_test = torch.from_numpy(data_x[train_size:]).type(torch.Tensor).to(device)
-y_test = torch.from_numpy(data_y[train_size:]).type(torch.Tensor).to(device)
+df_features.dropna(inplace=True)
 
-# 3. MODEL DEFINITION
-class PredictionModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
-        super(PredictionModel, self).__init__()
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+# 3. SCALING
+scaler = MinMaxScaler(feature_range=(-1, 1))
+scaled_data = scaler.fit_transform(df_features)
 
+seq_length = 12 
+X, y = [], []
+for i in range(len(scaled_data) - seq_length):
+    X.append(scaled_data[i : i + seq_length])
+    y.append(scaled_data[i + seq_length, 0]) # Target: AAPL Returns
+
+X, y = np.array(X), np.array(y)
+train_size = int(0.8 * len(X))
+
+X_train = torch.FloatTensor(X[:train_size]).to(device)
+y_train = torch.FloatTensor(y[:train_size]).unsqueeze(1).to(device)
+X_test = torch.FloatTensor(X[train_size:]).to(device)
+y_test = torch.FloatTensor(y[train_size:]).unsqueeze(1).to(device)
+
+# 4. MODEL (Added more complexity)
+class ProPredictor(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers):
+        super(ProPredictor, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=0.3)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1)
+        )
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim, device=device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim, device=device)
-        out, (hn, cn) = self.lstm(x, (h0.detach(), c0.detach()))
-        out = self.fc(out[:, -1, :])
-        return out
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :])
 
-# 4. INITIALIZE MODEL, LOSS, AND OPTIMIZER
-model = PredictionModel(input_dim=1, hidden_dim=32, num_layers=2, output_dim=1).to(device)
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
-num_epochs = 300 
+# input_dim is now 5
+model = ProPredictor(5, 128, 2).to(device)
+criterion = nn.HuberLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# 5. LOAD -> TRAIN -> SAVE LOGIC
-model_exists = os.path.exists(MODEL_PATH)
+# Learning Rate Scheduler: Lowers LR if the loss stops improving
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=20, factor=0.5)
 
-if model_exists:
-    print("--- Loading existing model weights to continue training ---")
+# 5. TRAINING
+if os.path.exists(MODEL_PATH):
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-else:
-    print("--- No saved model found. Training new model from scratch ---")
 
-print(f"Training/Updating model for {num_epochs} epochs...")
-model.train() 
-for i in range(num_epochs):
-    y_train_pred = model(X_train)
-    loss = criterion(y_train_pred, y_train)
-
+model.train()
+for epoch in range(600):
     optimizer.zero_grad()
+    pred = model(X_train)
+    loss = criterion(pred, y_train)
     loss.backward()
     optimizer.step()
-    
-    if i % 25 == 0:
-        print(f'Epoch {i}, Loss: {loss.item()}')
+    scheduler.step(loss) # Update scheduler
+    if epoch % 100 == 0: print(f"Epoch {epoch}, Loss: {loss.item():.6f}, LR: {optimizer.param_groups[0]['lr']}")
 
-# Save the updated weights
 torch.save(model.state_dict(), MODEL_PATH)
 
-# Print status message based on whether the file already existed
-if model_exists:
-    print("Updated existing model file.")
-else:
-    print("Created new model file.")
-
-# 6. PREDICTION AND EVALUATION
-model.eval() 
+# 6. EVALUATION
+model.eval()
 with torch.no_grad():
-    y_train_pred = model(X_train)
-    y_test_pred = model(X_test)
+    test_preds_scaled = model(X_test).cpu().numpy()
+    dummy = np.zeros((len(test_preds_scaled), 5)) # Must be 5 features now
+    dummy[:, 0] = test_preds_scaled.ravel()
+    pred_log_returns = scaler.inverse_transform(dummy)[:, 0].ravel()
 
-y_train_pred_np = scaler.inverse_transform(y_train_pred.cpu().numpy())
-y_train_np = scaler.inverse_transform(y_train.cpu().numpy())
-y_test_pred_np = scaler.inverse_transform(y_test_pred.cpu().numpy())
-y_test_np = scaler.inverse_transform(y_test.cpu().numpy())
+# One-Step Price Reconstruction
+num_preds = len(pred_log_returns)
+actual_prices_test = df_monthly[ticker].iloc[-num_preds:].values.ravel()
+previous_actual_prices = df_monthly[ticker].iloc[-num_preds-1 : -1].values.ravel()
+predicted_prices = previous_actual_prices * np.exp(pred_log_returns)
 
-train_rmse = root_mean_squared_error(y_train_np, y_train_pred_np)
-test_rmse = root_mean_squared_error(y_test_np, y_test_pred_np)
+# 7. METRICS
+rmse = root_mean_squared_error(actual_prices_test, predicted_prices)
+print(f"\nPRO MODEL RMSE: ${rmse:.2f}")
+print(f"Error Percentage: {(rmse / np.mean(actual_prices_test)) * 100:.2f}%")
 
-print(f"Train RMSE: {train_rmse:.4f}")
-print(f"Test RMSE: {test_rmse:.4f}")
-
-# 7. PLOTTING
-fig = plt.figure(figsize=(12,10))
-gs = fig.add_gridspec(4,1)
-
-ax1 = fig.add_subplot(gs[:3,0])
-test_dates = df.index[-len(y_test_np):]
-ax1.plot(test_dates, y_test_np, color='blue', label='Actual Price')
-ax1.plot(test_dates, y_test_pred_np, color='green', label='Predicted Price')
-ax1.legend()
-plt.title(f"{ticker} Stock Price Prediction (Updated Model)")
-
-ax2 = fig.add_subplot(gs[3,0])
-ax2.axhline(test_rmse, color='blue', linestyle='--', label='RMSE')
-ax2.plot(test_dates, abs(y_test_np - y_test_pred_np), 'r', label='Prediction Error')
-ax2.legend()
-plt.tight_layout()
+# 8. PLOT
+plt.figure(figsize=(12,6))
+plt.plot(df_monthly.index[-num_preds:], actual_prices_test, label="Actual AAPL")
+plt.plot(df_monthly.index[-num_preds:], predicted_prices, label="Pro Prediction", linestyle='--')
+plt.title("Pro Model: AAPL Prediction with Market Context")
+plt.legend()
 plt.show()
