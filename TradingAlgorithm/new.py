@@ -3,12 +3,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 import yfinance as yf
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from collections import Counter
 
 print("All libraries loaded")
 
@@ -16,8 +15,9 @@ config = {
     "data": {
         "window_size": 20,
         "train_split_size": 0.80,
-        "symbol": "DJI",  # Dow Jones Industrial Average
-        "period": "max",  # max, 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd
+        "symbol": "IBM",
+        "period": "5y",  # Use more data!
+        "predict_days_ahead": 1,  # Can change to 5 for weekly prediction
     },
     "plots": {
         "xticks_interval": 90,
@@ -29,19 +29,18 @@ config = {
         "color_pred_test": "#FF4136",
     },
     "model": {
-        "input_size": 5,
+        "input_size": 5,  # Simplified features
         "num_lstm_layers": 2,
-        "lstm_size": 32,
-        "dropout": 0.4,  # Even more dropout
+        "lstm_size": 32,  # Smaller to prevent overfitting
+        "dropout": 0.3,  # More dropout
     },
     "training": {
         "device": "cpu",
         "batch_size": 32,
-        "num_epoch": 60,
-        "learning_rate": 0.0005,  # Even lower LR
-        "scheduler_step_size": 25,
-        "weight_decay": 1e-4,  # Stronger L2
-        "use_class_weights": True,  # NEW: Balance UP/DOWN
+        "num_epoch": 50,
+        "learning_rate": 0.001,  # Lower learning rate
+        "scheduler_step_size": 20,
+        "weight_decay": 1e-5,  # L2 regularization
     }
 }
 
@@ -49,17 +48,26 @@ def create_features(data):
     """Create simplified but robust features"""
     df = pd.DataFrame()
     
+    # 1. Returns (most important)
     df['returns'] = data['Close'].pct_change()
+    
+    # 2. Volatility (rolling std of returns)
     df['volatility'] = df['returns'].rolling(10).std()
+    
+    # 3. Momentum (5-day return)
     df['momentum'] = data['Close'].pct_change(5)
+    
+    # 4. Volume change
     df['volume_change'] = data['Volume'].pct_change()
     
+    # 5. Price relative to 20-day MA
     ma20 = data['Close'].rolling(20).mean()
     df['price_to_ma20'] = (data['Close'] - ma20) / ma20
     
+    # Fill NaN values with 0
     df = df.fillna(0)
     
-    # Clip outliers
+    # Clip outliers (beyond 3 standard deviations)
     for col in df.columns:
         mean = df[col].mean()
         std = df[col].std()
@@ -73,6 +81,7 @@ def download_data(config):
     
     data_date = [date.strftime('%Y-%m-%d') for date in data.index]
     
+    # Create features
     features_df = create_features(data)
     data_features = features_df.values
     config["model"]["input_size"] = data_features.shape[1]
@@ -88,6 +97,7 @@ def download_data(config):
 
 data_date, data_close_price, data_features, num_data_points, display_date_range = download_data(config)
 
+# Plot original data
 fig = figure(figsize=(25, 5), dpi=80)
 fig.patch.set_facecolor((1.0, 1.0, 1.0))
 plt.plot(data_date, data_close_price, color=config["plots"]["color_actual"])
@@ -113,6 +123,7 @@ class Normalizer():
     def inverse_transform(self, x):
         return (x*self.sd) + self.mu
 
+# Normalize features
 scaler = Normalizer()
 normalized_features = scaler.fit_transform(data_features)
 
@@ -136,6 +147,7 @@ data_y = prepare_data_y(data_close_price, window_size=config["data"]["window_siz
 print(f"Data X shape: {data_x.shape}")
 print(f"Data Y shape: {data_y.shape}")
 
+# Split dataset
 split_index = int(data_y.shape[0]*config["data"]["train_split_size"])
 data_x_train = data_x[:split_index]
 data_x_val = data_x[split_index:]
@@ -159,6 +171,7 @@ dataset_val = TimeSeriesDataset(data_x_val, data_y_val)
 print("Train data shape", dataset_train.x.shape, dataset_train.y.shape)
 print("Validation data shape", dataset_val.x.shape, dataset_val.y.shape)
 
+# Check for class imbalance
 train_up = np.sum(data_y_train > 0)
 train_down = np.sum(data_y_train < 0)
 print(f"Training set balance: UP={train_up} ({100*train_up/len(data_y_train):.1f}%), DOWN={train_down} ({100*train_down/len(data_y_train):.1f}%)")
@@ -167,18 +180,7 @@ val_up = np.sum(data_y_val > 0)
 val_down = np.sum(data_y_val < 0)
 print(f"Validation set balance: UP={val_up} ({100*val_up/len(data_y_val):.1f}%), DOWN={val_down} ({100*val_down/len(data_y_val):.1f}%)")
 
-# Create weighted sampler to balance UP/DOWN during training
-if config["training"]["use_class_weights"]:
-    train_directions = np.sign(data_y_train)
-    class_counts = Counter(train_directions)
-    class_weights = {cls: 1.0/count for cls, count in class_counts.items()}
-    sample_weights = [class_weights[cls] for cls in train_directions]
-    sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
-    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], sampler=sampler)
-    print("✅ Using weighted sampling to balance UP/DOWN training")
-else:
-    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True)
-
+train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True)
 val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=True)
 
 class LSTMModel(nn.Module):
@@ -189,9 +191,6 @@ class LSTMModel(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size=self.hidden_layer_size, num_layers=num_layers,
                             batch_first=True, dropout=dropout if num_layers > 1 else 0)
         self.dropout = nn.Dropout(dropout)
-        
-        # Add batch normalization to help with training stability
-        self.bn = nn.BatchNorm1d(hidden_layer_size)
         self.linear = nn.Linear(hidden_layer_size, output_size)
 
         self.init_weights()
@@ -207,13 +206,7 @@ class LSTMModel(nn.Module):
 
     def forward(self, x):
         lstm_out, (h_n, c_n) = self.lstm(x)
-        x = h_n[-1]
-        
-        # Only apply batch norm during training with batch size > 1
-        if self.training and x.shape[0] > 1:
-            x = self.bn(x)
-        
-        x = self.dropout(x)
+        x = self.dropout(h_n[-1])
         predictions = self.linear(x)
         return predictions.squeeze()
 
@@ -239,8 +232,6 @@ def run_epoch(dataloader, is_training=False):
 
         if is_training:
             loss.backward()
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         epoch_loss += (loss.detach().item() / batchsize)
@@ -253,6 +244,7 @@ model = LSTMModel(input_size=config["model"]["input_size"], hidden_layer_size=co
                   num_layers=config["model"]["num_lstm_layers"], output_size=1, dropout=config["model"]["dropout"])
 model = model.to(config["training"]["device"])
 
+# Use Huber Loss - robust to outliers
 criterion = nn.HuberLoss(delta=0.01)
 optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"], 
                        weight_decay=config["training"]["weight_decay"])
@@ -263,7 +255,7 @@ print("TRAINING STARTED")
 print("="*50)
 
 best_val_loss = float('inf')
-patience = 15
+patience = 10
 patience_counter = 0
 
 for epoch in range(config["training"]["num_epoch"]):
@@ -271,6 +263,7 @@ for epoch in range(config["training"]["num_epoch"]):
     loss_val, lr_val = run_epoch(val_dataloader)
     scheduler.step()
     
+    # Early stopping
     if loss_val < best_val_loss:
         best_val_loss = loss_val
         patience_counter = 0
@@ -295,16 +288,17 @@ val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_si
 
 model.eval()
 
+# Predict on validation data
 predicted_val_returns = np.array([])
 actual_val_returns = np.array([])
 for idx, (x, y) in enumerate(val_dataloader):
     x = x.to(config["training"]["device"])
-    with torch.no_grad():
-        out = model(x)
+    out = model(x)
     out = out.cpu().detach().numpy()
     predicted_val_returns = np.concatenate((predicted_val_returns, out))
     actual_val_returns = np.concatenate((actual_val_returns, y.cpu().numpy()))
 
+# Convert returns back to prices for plotting
 def returns_to_prices(returns, initial_price):
     prices = [initial_price]
     for ret in returns:
@@ -316,10 +310,12 @@ predicted_val_prices = returns_to_prices(predicted_val_returns, val_start_price)
 actual_val_prices = data_close_price[split_index+config["data"]["window_size"]+config["data"]["predict_days_ahead"]-1:
                                      split_index+config["data"]["window_size"]+config["data"]["predict_days_ahead"]-1+len(predicted_val_returns)]
 
+# Calculate metrics
 print("="*50)
 print("PERFORMANCE METRICS")
 print("="*50)
 
+# Price-based metrics
 val_mae = mean_absolute_error(actual_val_prices, predicted_val_prices)
 val_rmse = np.sqrt(mean_squared_error(actual_val_prices, predicted_val_prices))
 val_mape = np.mean(np.abs((actual_val_prices - predicted_val_prices) / actual_val_prices)) * 100
@@ -329,6 +325,7 @@ print(f"  MAE:  ${val_mae:.2f}")
 print(f"  RMSE: ${val_rmse:.2f}")
 print(f"  MAPE: {val_mape:.2f}%")
 
+# Direction accuracy
 actual_directions = np.sign(actual_val_returns)
 predicted_directions = np.sign(predicted_val_returns)
 direction_accuracy = np.mean(actual_directions == predicted_directions) * 100
@@ -336,6 +333,7 @@ direction_accuracy = np.mean(actual_directions == predicted_directions) * 100
 print(f"\n⭐ DIRECTION ACCURACY: {direction_accuracy:.2f}%")
 print(f"   (Random = 50%, Good = 55-60%, Excellent = 60%+)")
 
+# Detailed analysis
 correct_up = np.sum((actual_directions > 0) & (predicted_directions > 0))
 correct_down = np.sum((actual_directions < 0) & (predicted_directions < 0))
 total_up = np.sum(actual_directions > 0)
@@ -378,25 +376,26 @@ if len(returns_if_traded) > 0:
     
     print(f"\nSimulated Trading Performance:")
     print(f"  Average daily return: {avg_return*100:.3f}%")
-    print(f"  Sharpe Ratio: {sharpe:.2f}")
+    print(f"  Sharpe Ratio: {sharpe:.2f} (>1.0 is good, >2.0 is excellent)")
     print(f"  Total return: {total_return*100:.2f}%")
     
     if sharpe > 1.0:
-        print(f"  ✅ Good Sharpe - model shows promise!")
-    elif sharpe > 0.5:
-        print(f"  ⚠️ Moderate Sharpe - better than random")
+        print(f"  ✅ Positive Sharpe - model shows promise!")
+    elif sharpe > 0:
+        print(f"  ⚠️ Low but positive Sharpe - marginally better than random")
     else:
-        print(f"  ❌ Low Sharpe - marginal improvement")
+        print(f"  ❌ Negative Sharpe - model not profitable")
 
 print("="*50 + "\n")
 
+# Plot
 fig = figure(figsize=(25, 5), dpi=80)
 fig.patch.set_facecolor((1.0, 1.0, 1.0))
 val_dates = data_date[split_index+config["data"]["window_size"]+config["data"]["predict_days_ahead"]-1:
                       split_index+config["data"]["window_size"]+config["data"]["predict_days_ahead"]-1+len(predicted_val_returns)]
 plt.plot(val_dates, actual_val_prices, label="Actual prices", color=config["plots"]["color_actual"], linewidth=2)
 plt.plot(val_dates, predicted_val_prices, label="Predicted prices", color=config["plots"]["color_pred_val"], linewidth=2, linestyle='--')
-plt.title(f"{config['data']['symbol']} - Validation (Dir: {direction_accuracy:.1f}%, Sharpe: {sharpe:.2f})")
+plt.title(f"{config['data']['symbol']} - Validation (Direction: {direction_accuracy:.1f}%, Sharpe: {sharpe:.2f})")
 xticks = [val_dates[i] if ((i%20==0 and (len(val_dates)-i) > 20) or i==len(val_dates)-1) else None for i in range(len(val_dates))]
 xs = np.arange(0,len(xticks))
 plt.xticks(xs, xticks, rotation='vertical')
@@ -407,111 +406,36 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+# Predict next day
 model.eval()
+x = torch.tensor(data_x_unseen).float().to(config["training"]["device"]).unsqueeze(0)
+with torch.no_grad():
+    predicted_return = model(x).cpu().numpy()
+    if predicted_return.ndim == 0:
+        predicted_return = float(predicted_return)
+    else:
+        predicted_return = float(predicted_return[0])
 
-x = torch.tensor(data_x_unseen).float().to(config["training"]["device"]).unsqueeze(0).unsqueeze(2) # this is the data type and shape required, [batch, sequence, feature]
-prediction = model(x)
-prediction = prediction.cpu().detach().numpy()
+current_price = data_close_price[-1]
+predicted_next_price = current_price * (1 + predicted_return)
 
-# prepare plots
+print("="*50)
+print(f"NEXT {config['data']['predict_days_ahead']} DAY PREDICTION")
+print("="*50)
+print(f"Current price:        ${current_price:.2f}")
+print(f"Predicted return:     {predicted_return:.4f} ({predicted_return*100:.2f}%)")
+print(f"Predicted price:      ${predicted_next_price:.2f}")
+print(f"Expected change:      ${predicted_next_price - current_price:+.2f}")
+print(f"Direction:            {'📈 UP' if predicted_return > 0 else '📉 DOWN'}")
+print("="*50)
 
-plot_range = 10
-to_plot_data_y_val = np.zeros(plot_range)
-to_plot_data_y_val_pred = np.zeros(plot_range)
-to_plot_data_y_test_pred = np.zeros(plot_range)
-
-to_plot_data_y_val[:plot_range-1] = scaler.inverse_transform(data_y_val)[-plot_range+1:]
-to_plot_data_y_val_pred[:plot_range-1] = scaler.inverse_transform(predicted_val)[-plot_range+1:]
-
-to_plot_data_y_test_pred[plot_range-1] = scaler.inverse_transform(prediction)[0]
-
-to_plot_data_y_val = np.where(to_plot_data_y_val == 0, None, to_plot_data_y_val)
-to_plot_data_y_val_pred = np.where(to_plot_data_y_val_pred == 0, None, to_plot_data_y_val_pred)
-to_plot_data_y_test_pred = np.where(to_plot_data_y_test_pred == 0, None, to_plot_data_y_test_pred)
-
-# plot
-
-plot_date_test = data_date[-plot_range+1:]
-plot_date_test.append("tomorrow")
-
-fig = figure(figsize=(25, 5), dpi=80)
-fig.patch.set_facecolor((1.0, 1.0, 1.0))
-plt.plot(plot_date_test, to_plot_data_y_val, label="Actual prices", marker=".", markersize=10, color=config["plots"]["color_actual"])
-plt.plot(plot_date_test, to_plot_data_y_val_pred, label="Past predicted prices", marker=".", markersize=10, color=config["plots"]["color_pred_val"])
-plt.plot(plot_date_test, to_plot_data_y_test_pred, label="Predicted price for next day", marker=".", markersize=20, color=config["plots"]["color_pred_test"])
-plt.title("Predicting the close price of the next trading day")
-plt.grid(which='major', axis='y', linestyle='--')
-plt.legend()
-plt.show()
-
-print("Predicted close price of the next trading day:", round(to_plot_data_y_test_pred[plot_range-1], 2))
-
-# Save predicted vs actual validation data to CSV
-print("\nSaving predicted vs actual validation data to CSV...")
-# Ensure data is properly formatted as arrays
-actual_prices = np.array(to_plot_data_y_val_subset).flatten()
-predicted_prices = np.array(to_plot_predicted_val).flatten()
-dates = np.array(to_plot_data_date).flatten()
-
-validation_df = pd.DataFrame({
-    'Date': dates,
-    'Actual_Price': actual_prices,
-    'Predicted_Price': predicted_prices
-})
-validation_df.to_csv('predicted_vs_actual_validation.csv', index=False)
-print("Saved to: predicted_vs_actual_validation.csv")
-print(f"Saved {len(validation_df)} rows of predicted vs actual data")
-
-# Predict next month (approximately 20-22 trading days)
-print("\nPredicting next month stock movement...")
-model.eval()
-
-# Start with the last window of data
-current_window = data_x_unseen.copy()
-predictions_next_month = []
-trading_days_in_month = 22  # Approximate trading days in a month
-
-for day in range(trading_days_in_month):
-    x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0).unsqueeze(2)
-    prediction = model(x)
-    prediction_value = prediction.cpu().detach().numpy()[0]
-    predictions_next_month.append(prediction_value)
-    
-    # Update window: remove first element and add prediction
-    current_window = np.append(current_window[1:], prediction_value)
-
-# Inverse transform predictions
-predictions_next_month_actual = scaler.inverse_transform(np.array(predictions_next_month).reshape(-1, 1)).flatten()
-
-# Get the last actual price
-last_actual_price = data_close_price[-1]
-# Get the predicted price at the end of next month
-predicted_price_end_month = predictions_next_month_actual[-1]
-
-# Determine if stock will go up or down
-price_change = predicted_price_end_month - last_actual_price
-price_change_percent = (price_change / last_actual_price) * 100
-direction = "up" if price_change > 0 else "down"
-
-print(f"Last actual price: ${last_actual_price:.2f}")
-print(f"Predicted price at end of next month: ${predicted_price_end_month:.2f}")
-print(f"Predicted change: ${price_change:.2f} ({price_change_percent:.2f}%)")
-print(f"Prediction: Stock will go {direction} in the next month")
-
-# Save next month prediction to CSV
-print("\nSaving next month prediction to CSV...")
-prediction_df = pd.DataFrame({
-    'Day': range(1, trading_days_in_month + 1),
-    'Predicted_Price': predictions_next_month_actual
-})
-prediction_df.to_csv('next_month_prediction.csv', index=False)
-print("Saved to: next_month_prediction.csv")
-
-# Save simple direction prediction (just "up" or "down") as CSV
-print("\nSaving final month direction prediction...")
-direction_df = pd.DataFrame({
-    'Direction': [direction]
-})
-direction_df.to_csv('stock_direction_prediction.csv', index=False)
-print(f"Saved direction prediction to: stock_direction_prediction.csv")
-print(f"Direction: {direction}")
+# Summary
+print(f"\n{'='*50}")
+print("SUMMARY")
+print(f"{'='*50}")
+print(f"Dataset: {num_data_points} days ({display_date_range})")
+print(f"Direction Accuracy: {direction_accuracy:.1f}%", "✅" if direction_accuracy > 52 else "⚠️")
+print(f"Sharpe Ratio: {sharpe:.2f}", "✅" if sharpe > 0.5 else "❌")
+print(f"Price MAE: ${val_mae:.2f}")
+print(f"Model Status:", "BETTER THAN RANDOM 🎯" if direction_accuracy > 52 and sharpe > 0 else "NEEDS IMPROVEMENT 🔧")
+print(f"{'='*50}")
