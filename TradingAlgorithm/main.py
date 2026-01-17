@@ -122,9 +122,3 @@ ax2.plot(test_dates, abs(y_test_np - y_test_pred_np), 'r', label='Prediction Err
 ax2.legend()
 plt.tight_layout()
 plt.show()
-
-
-
-
-
-
