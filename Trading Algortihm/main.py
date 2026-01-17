@@ -15,7 +15,7 @@ from sklearn.metrics import root_mean_squared_error
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
 
-# use ticker symbola e.g(AAPL) to identify sotcks
+# use ticker symbol e.g(AAPL) to identify sotcks
 ticker = 'AAPL'
 # accessing data relating to stock as initalized above
 df = yf.download(ticker, '2020-01-01')
@@ -138,9 +138,3 @@ plt.xlabel('Date')
 plt.ylabel('Error')
 plt.tight_layout()
 plt.show()
-
-
-
-
-
-
