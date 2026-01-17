@@ -4,34 +4,60 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stock Trading Algorithm</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="container">
-        <div class="logo"><img src="logo.png" alt="Comapny Logo" length="100" width="100" ></div>
-    </div>
-    <div class="controls">
-        <div class="control-group">
-            <div id="daysContainer">
-                <input type="text" id="days" name="days" placeholder="e.g., AAPL" value="">
+    <div class="header">
+        <div class="header-content">
+            <div class="logo-section">
+                <div class="logo-wrapper">
+                    <img src="logo.png" alt="Company Logo" class="logo-img">
+                </div>
+                <div class="header-text">
+                    <h1>Stock Trading Algorithm</h1>
+                    <p class="subtitle">AI-Powered Price Prediction</p>
+                </div>
             </div>
-            <label>Stock Ticker</label>
-        </div>
-        <div class="control-group">
-            <button id="processBtn">SUBMIT</button>
         </div>
     </div>
+
+    <div class="main-container">
+        <div class="controls-card">
+            <div class="controls-header">
+                <h2>Analyze Stock Performance</h2>
+                <p>Enter a stock ticker to view predictions</p>
+            </div>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="days">Stock Ticker</label>
+                    <div id="daysContainer">
+                        <input type="text" id="days" name="days" placeholder="e.g., AAPL" value="" maxlength="5">
+                    </div>
+                </div>
+                <div class="control-group">
+                    <button id="processBtn" class="submit-btn">
+                        <span>ANALYZE</span>
+                        <span class="btn-icon">→</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     
+    <div class="chart-container">
+        <div id="chart-wrapper"></div>
+    </div>
+
     <script type="module">
     import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
 
     // Declare the chart dimensions and margins.
-    const width = window.innerWidth * 0.7;
-    const height = window.innerHeight * 0.5;
+    const width = Math.min(window.innerWidth * 0.85, 1000);
+    const height = window.innerHeight * 0.55;
     const marginTop = 20;
-    const marginRight = 20;
-    const marginBottom = 40;
-    const marginLeft = 40;
+    const marginRight = 30;
+    const marginBottom = 50;
+    const marginLeft = 60;
 
     // Load and parse CSV data
     let data = await d3.csv("predicted_vs_actual_validation.csv");
@@ -54,79 +80,119 @@
                  d3.max(data, d => Math.max(d.actual, d.predicted)) + 10])
         .range([height - marginBottom, marginTop]);
 
-    // Create the SVG container.
+    // Create the SVG container with better styling.
     const svg = d3.create("svg")
         .attr("width", width)
         .attr("height", height)
-        .style("border", "1px solid white")
-        .style("padding", "2vw");
+        .attr("viewBox", [0, 0, width, height])
+        .style("background", "#0f172a")
+        .style("border-radius", "12px")
+        .style("box-shadow", "0 8px 32px rgba(0, 0, 0, 0.3)");
 
-    // Add the x-axis.
+    // Add subtle grid lines
     svg.append("g")
-        .attr("class", "axis")
+        .attr("class", "grid")
+        .attr("opacity", "0.1")
+        .call(d3.axisLeft(y)
+            .tickSize(-width + marginLeft + marginRight)
+            .tickFormat("")
+        );
+
+    // Add the x-axis with improved styling.
+    svg.append("g")
+        .attr("class", "axis x-axis")
         .attr("transform", `translate(0,${height - marginBottom})`)
-        .call(d3.axisBottom(x));
+        .call(d3.axisBottom(x).ticks(6));
 
-    // Add the y-axis.
+    // Add the y-axis with improved styling.
     svg.append("g")
-        .attr("class", "axis")
+        .attr("class", "axis y-axis")
         .attr("transform", `translate(${marginLeft},0)`)
-        .call(d3.axisLeft(y));
+        .call(d3.axisLeft(y).ticks(6));
+
+    // Add axis labels
+    svg.append("text")
+        .attr("class", "axis-label")
+        .attr("x", width / 2)
+        .attr("y", height - 5)
+        .style("text-anchor", "middle")
+        .style("fill", "#94a3b8")
+        .style("font-size", "12px")
+        .text("Date");
+
+    svg.append("text")
+        .attr("class", "axis-label")
+        .attr("transform", "rotate(-90)")
+        .attr("x", -height / 2)
+        .attr("y", 15)
+        .style("text-anchor", "middle")
+        .style("fill", "#94a3b8")
+        .style("font-size", "12px")
+        .text("Price (USD)");
 
     // Line generator
     const line = d3.line()
         .x(d => x(d.date));
 
-    // Draw actual price line
+    // Draw actual price line with gradient
     svg.append("path")
         .datum(data)
         .attr("fill", "none")
-        .attr("stroke", "steelblue")
-        .attr("stroke-width", 1.5)
-        .attr("d", line.y(d => y(d.actual)));
+        .attr("stroke", "#06b6d4")
+        .attr("stroke-width", 2.5)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round")
+        .attr("d", line.y(d => y(d.actual)))
+        .style("filter", "drop-shadow(0 0 4px rgba(6, 182, 212, 0.3))");
 
-    // Draw predicted price line
+    // Draw predicted price line with gradient
     svg.append("path")
         .datum(data)
         .attr("fill", "none")
-        .attr("stroke", "orange")
-        .attr("stroke-width", 1.5)
-        .attr("d", line.y(d => y(d.predicted)));
+        .attr("stroke", "#f59e0b")
+        .attr("stroke-width", 2.5)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round")
+        .attr("d", line.y(d => y(d.predicted)))
+        .style("filter", "drop-shadow(0 0 4px rgba(245, 158, 11, 0.3))");
 
-    // Add legend below the x-axis
-    const legendY = height - marginBottom + 30;
-    const legendStartX = width / 2 - 120;
+    // Add legend below the x-axis with better styling
+    const legendY = height - marginBottom + 40;
+    const legendStartX = marginLeft;
+    const legendSpacing = 200;
     
     // Actual price legend
     svg.append("circle")
         .attr("cx", legendStartX)
         .attr("cy", legendY)
-        .attr("r", 6)
-        .style("fill", "steelblue");
+        .attr("r", 5)
+        .style("fill", "#06b6d4");
     
     svg.append("text")
         .attr("x", legendStartX + 15)
-        .attr("y", legendY + 5)
-        .style("fill", "#e0e0e0")
-        .style("font-size", "12px")
+        .attr("y", legendY + 4)
+        .style("fill", "#cbd5e1")
+        .style("font-size", "13px")
+        .style("font-weight", "500")
         .text("Actual Price");
     
     // Predicted price legend
     svg.append("circle")
-        .attr("cx", legendStartX + 150)
+        .attr("cx", legendStartX + legendSpacing)
         .attr("cy", legendY)
-        .attr("r", 6)
-        .style("fill", "orange");
+        .attr("r", 5)
+        .style("fill", "#f59e0b");
     
     svg.append("text")
-        .attr("x", legendStartX + 165)
-        .attr("y", legendY + 5)
-        .style("fill", "#e0e0e0")
-        .style("font-size", "12px")
+        .attr("x", legendStartX + legendSpacing + 15)
+        .attr("y", legendY + 4)
+        .style("fill", "#cbd5e1")
+        .style("font-size", "13px")
+        .style("font-weight", "500")
         .text("Predicted Price");
 
     // Append the SVG element
-    container.append(svg.node());
+    document.getElementById('chart-wrapper').appendChild(svg.node());
 
     </script>
     <script src="script.js"></script>
