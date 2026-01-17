@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 
 import yfinance as yf
+import pandas as pd
+import csv
 
 print("All libraries loaded")
 
@@ -372,3 +374,73 @@ plt.legend()
 plt.show()
 
 print("Predicted close price of the next trading day:", round(to_plot_data_y_test_pred[plot_range-1], 2))
+
+# Save predicted vs actual validation data to CSV
+print("\nSaving predicted vs actual validation data to CSV...")
+# Ensure data is properly formatted as arrays
+actual_prices = np.array(to_plot_data_y_val_subset).flatten()
+predicted_prices = np.array(to_plot_predicted_val).flatten()
+dates = np.array(to_plot_data_date).flatten()
+
+validation_df = pd.DataFrame({
+    'Date': dates,
+    'Actual_Price': actual_prices,
+    'Predicted_Price': predicted_prices
+})
+validation_df.to_csv('predicted_vs_actual_validation.csv', index=False)
+print("Saved to: predicted_vs_actual_validation.csv")
+print(f"Saved {len(validation_df)} rows of predicted vs actual data")
+
+# Predict next month (approximately 20-22 trading days)
+print("\nPredicting next month stock movement...")
+model.eval()
+
+# Start with the last window of data
+current_window = data_x_unseen.copy()
+predictions_next_month = []
+trading_days_in_month = 22  # Approximate trading days in a month
+
+for day in range(trading_days_in_month):
+    x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0).unsqueeze(2)
+    prediction = model(x)
+    prediction_value = prediction.cpu().detach().numpy()[0]
+    predictions_next_month.append(prediction_value)
+    
+    # Update window: remove first element and add prediction
+    current_window = np.append(current_window[1:], prediction_value)
+
+# Inverse transform predictions
+predictions_next_month_actual = scaler.inverse_transform(np.array(predictions_next_month).reshape(-1, 1)).flatten()
+
+# Get the last actual price
+last_actual_price = data_close_price[-1]
+# Get the predicted price at the end of next month
+predicted_price_end_month = predictions_next_month_actual[-1]
+
+# Determine if stock will go up or down
+price_change = predicted_price_end_month - last_actual_price
+price_change_percent = (price_change / last_actual_price) * 100
+direction = "up" if price_change > 0 else "down"
+
+print(f"Last actual price: ${last_actual_price:.2f}")
+print(f"Predicted price at end of next month: ${predicted_price_end_month:.2f}")
+print(f"Predicted change: ${price_change:.2f} ({price_change_percent:.2f}%)")
+print(f"Prediction: Stock will go {direction} in the next month")
+
+# Save next month prediction to CSV
+print("\nSaving next month prediction to CSV...")
+prediction_df = pd.DataFrame({
+    'Day': range(1, trading_days_in_month + 1),
+    'Predicted_Price': predictions_next_month_actual
+})
+prediction_df.to_csv('next_month_prediction.csv', index=False)
+print("Saved to: next_month_prediction.csv")
+
+# Save simple direction prediction (just "up" or "down") as CSV
+print("\nSaving final month direction prediction...")
+direction_df = pd.DataFrame({
+    'Direction': [direction]
+})
+direction_df.to_csv('stock_direction_prediction.csv', index=False)
+print(f"Saved direction prediction to: stock_direction_prediction.csv")
+print(f"Direction: {direction}")
