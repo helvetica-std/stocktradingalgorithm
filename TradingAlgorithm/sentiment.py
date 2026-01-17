@@ -13,7 +13,7 @@ import requests
 import warnings
 warnings.filterwarnings('ignore')
 
-print("All libraries loaded")
+print("Core libraries loaded")
 
 config = {
     "data": {"window_size": 20, "train_split_size": 0.80, "symbol": "IBM", "period": "max"},
@@ -31,14 +31,28 @@ config = {
 }
 
 # Load FinBERT
-print("Loading FinBERT...")
-tokenizer = AutoTokenizer.from_pretrained(config["sentiment"]["model_name"])
-finbert_model = AutoModelForSequenceClassification.from_pretrained(config["sentiment"]["model_name"])
-finbert_model.eval()
-print("✓ FinBERT loaded")
+if TRANSFORMERS_AVAILABLE:
+    print("Loading FinBERT model (this may take a minute on first run)...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(config["sentiment"]["model_name"])
+        finbert_model = AutoModelForSequenceClassification.from_pretrained(config["sentiment"]["model_name"])
+        finbert_model.eval()
+        print("✓ FinBERT loaded successfully")
+    except Exception as e:
+        print(f"❌ Error loading FinBERT: {e}")
+        print("   The model will download on first use (~500MB)")
+        TRANSFORMERS_AVAILABLE = False
+else:
+    print("⚠️  Transformers not available. Sentiment analysis disabled.")
+    print("   Install with: pip install transformers torch")
+    tokenizer = None
+    finbert_model = None
 
 def get_sentiment_score(text):
     """Analyze sentiment using FinBERT. Returns score from -1 to 1."""
+    if not TRANSFORMERS_AVAILABLE or tokenizer is None or finbert_model is None:
+        return 0.0  # Return neutral if transformers not available
+    
     if not text or len(text.strip()) == 0:
         return 0.0
     try:
@@ -48,7 +62,8 @@ def get_sentiment_score(text):
             predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
         positive, negative, neutral = predictions[0]
         return (positive - negative).item()
-    except:
+    except Exception as e:
+        print(f"Sentiment analysis error: {e}")
         return 0.0
 
 def fetch_yahoo_news(symbol, max_articles=30):
@@ -104,6 +119,11 @@ def fetch_newsapi(symbol, company_name, days_back=7):
 def get_news_sentiment(symbol, company_name):
     """Get recent news sentiment"""
     print(f"\n{'='*70}\nFetching news for {symbol}\n{'='*70}")
+    
+    if not TRANSFORMERS_AVAILABLE:
+        print("⚠️  Sentiment analysis disabled (transformers not installed)")
+        print("   Install with: pip install transformers torch")
+        return 0.0, []
     
     # Try NewsAPI first, fallback to Yahoo
     articles = fetch_newsapi(symbol, company_name) if config["sentiment"]["use_real_api"] else []
@@ -313,6 +333,80 @@ predicted_train = np.concatenate([model(x.to(config["training"]["device"])).cpu(
 predicted_val = np.concatenate([model(x.to(config["training"]["device"])).cpu().detach().numpy() 
                                for x, _ in val_dataloader])
 
+# Calculate accuracy metrics
+def calculate_metrics(actual, predicted, scaler):
+    """Calculate comprehensive accuracy metrics"""
+    # Inverse transform to get actual prices
+    actual_prices = scaler.inverse_transform(actual)
+    predicted_prices = scaler.inverse_transform(predicted)
+    
+    # Mean Absolute Error (MAE)
+    mae = np.mean(np.abs(actual_prices - predicted_prices))
+    
+    # Mean Absolute Percentage Error (MAPE)
+    mape = np.mean(np.abs((actual_prices - predicted_prices) / actual_prices)) * 100
+    
+    # Root Mean Squared Error (RMSE)
+    rmse = np.sqrt(np.mean((actual_prices - predicted_prices) ** 2))
+    
+    # R-squared (R²) - coefficient of determination
+    ss_res = np.sum((actual_prices - predicted_prices) ** 2)
+    ss_tot = np.sum((actual_prices - np.mean(actual_prices)) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    
+    # Direction Accuracy (did we predict up/down correctly?)
+    actual_direction = np.diff(actual_prices) > 0
+    predicted_direction = np.diff(predicted_prices) > 0
+    direction_accuracy = np.mean(actual_direction == predicted_direction) * 100
+    
+    # Mean Percentage Error (MPE) - shows bias
+    mpe = np.mean((actual_prices - predicted_prices) / actual_prices) * 100
+    
+    return {
+        'MAE': mae,
+        'MAPE': mape,
+        'RMSE': rmse,
+        'R2': r2,
+        'Direction_Accuracy': direction_accuracy,
+        'MPE': mpe
+    }
+
+# Calculate metrics for train and validation sets
+print("\n" + "="*70)
+print("MODEL PERFORMANCE METRICS")
+print("="*70)
+
+train_metrics = calculate_metrics(data_y_train, predicted_train, price_scaler)
+val_metrics = calculate_metrics(data_y_val, predicted_val, price_scaler)
+
+print("\n📊 TRAINING SET:")
+print(f"   MAE (Mean Absolute Error):        ${train_metrics['MAE']:.2f}")
+print(f"   MAPE (Mean Abs % Error):          {train_metrics['MAPE']:.2f}%")
+print(f"   RMSE (Root Mean Squared Error):   ${train_metrics['RMSE']:.2f}")
+print(f"   R² Score:                         {train_metrics['R2']:.4f} ({train_metrics['R2']*100:.2f}%)")
+print(f"   Direction Accuracy:               {train_metrics['Direction_Accuracy']:.2f}%")
+print(f"   MPE (Bias):                       {train_metrics['MPE']:.2f}%")
+
+print("\n📈 VALIDATION SET:")
+print(f"   MAE (Mean Absolute Error):        ${val_metrics['MAE']:.2f}")
+print(f"   MAPE (Mean Abs % Error):          {val_metrics['MAPE']:.2f}%")
+print(f"   RMSE (Root Mean Squared Error):   ${val_metrics['RMSE']:.2f}")
+print(f"   R² Score:                         {val_metrics['R2']:.4f} ({val_metrics['R2']*100:.2f}%)")
+print(f"   Direction Accuracy:               {val_metrics['Direction_Accuracy']:.2f}%")
+print(f"   MPE (Bias):                       {val_metrics['MPE']:.2f}%")
+
+print("\n💡 INTERPRETATION:")
+print(f"   • MAPE {val_metrics['MAPE']:.1f}% means predictions are off by ~${val_metrics['MAE']:.2f} on average")
+print(f"   • R² of {val_metrics['R2']:.2%} means the model explains {val_metrics['R2']*100:.1f}% of price variance")
+print(f"   • Direction accuracy {val_metrics['Direction_Accuracy']:.1f}% = predicting up/down correctly")
+if abs(val_metrics['MPE']) > 2:
+    bias_dir = "overestimating" if val_metrics['MPE'] < 0 else "underestimating"
+    print(f"   • Model is slightly {bias_dir} prices by {abs(val_metrics['MPE']):.1f}%")
+else:
+    print(f"   • Model has minimal bias ({abs(val_metrics['MPE']):.1f}%)")
+
+print("="*70 + "\n")
+
 # Plot results
 to_plot_train = np.zeros(num_data_points)
 to_plot_val = np.zeros(num_data_points)
@@ -332,6 +426,72 @@ plt.grid()
 plt.legend()
 plt.show()
 
+# Visualize metrics comparison
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+fig.suptitle('Model Performance Metrics Comparison', fontsize=16, fontweight='bold')
+
+metrics_names = ['MAE ($)', 'MAPE (%)', 'RMSE ($)', 'R² Score', 'Direction Acc (%)', 'Bias (MPE %)']
+metrics_keys = ['MAE', 'MAPE', 'RMSE', 'R2', 'Direction_Accuracy', 'MPE']
+
+for idx, (ax, name, key) in enumerate(zip(axes.flat, metrics_names, metrics_keys)):
+    train_val = train_metrics[key]
+    val_val = val_metrics[key]
+    
+    bars = ax.bar(['Train', 'Validation'], [train_val, val_val], 
+                  color=['#3D9970', '#0074D9'], alpha=0.7, edgecolor='black')
+    ax.set_ylabel(name)
+    ax.set_title(name)
+    ax.grid(axis='y', alpha=0.3)
+    
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.2f}',
+                ha='center', va='bottom', fontweight='bold')
+    
+    # Special handling for R² (0-1 range)
+    if key == 'R2':
+        ax.set_ylim([0, 1])
+        ax.axhline(y=0.7, color='green', linestyle='--', alpha=0.5, label='Good (>0.7)')
+        ax.axhline(y=0.5, color='orange', linestyle='--', alpha=0.5, label='Fair (>0.5)')
+        ax.legend(fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+# Error distribution plot
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
+
+# Validation errors
+val_actual = price_scaler.inverse_transform(data_y_val)
+val_pred = price_scaler.inverse_transform(predicted_val)
+val_errors = val_actual - val_pred
+val_error_pct = (val_errors / val_actual) * 100
+
+ax1.hist(val_errors, bins=50, color='#0074D9', alpha=0.7, edgecolor='black')
+ax1.axvline(0, color='red', linestyle='--', linewidth=2, label='Zero Error')
+ax1.axvline(np.mean(val_errors), color='green', linestyle='--', linewidth=2, 
+            label=f'Mean: ${np.mean(val_errors):.2f}')
+ax1.set_xlabel('Prediction Error ($)', fontsize=12)
+ax1.set_ylabel('Frequency', fontsize=12)
+ax1.set_title('Distribution of Prediction Errors (Validation Set)', fontsize=14, fontweight='bold')
+ax1.legend()
+ax1.grid(alpha=0.3)
+
+ax2.hist(val_error_pct, bins=50, color='#0074D9', alpha=0.7, edgecolor='black')
+ax2.axvline(0, color='red', linestyle='--', linewidth=2, label='Zero Error')
+ax2.axvline(np.mean(val_error_pct), color='green', linestyle='--', linewidth=2, 
+            label=f'Mean: {np.mean(val_error_pct):.2f}%')
+ax2.set_xlabel('Prediction Error (%)', fontsize=12)
+ax2.set_ylabel('Frequency', fontsize=12)
+ax2.set_title('Distribution of Percentage Errors (Validation Set)', fontsize=14, fontweight='bold')
+ax2.legend()
+ax2.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
 # Next day prediction
 x = torch.tensor(data_x_unseen).float().unsqueeze(0)
 next_day_pred = model(x).cpu().detach().numpy()[0]
@@ -345,18 +505,40 @@ print(f"Next day prediction: ${next_day_price:.2f}")
 print(f"Current sentiment: {current_sentiment:+.3f} ({'Positive' if current_sentiment>0 else 'Negative'})")
 print(f"{'='*70}\n")
 
-# Save results
+# Save results with metrics
 val_dates = data_date[split_index+ws:]
-pd.DataFrame({
+results_df = pd.DataFrame({
     'Date': val_dates,
     'Actual': price_scaler.inverse_transform(data_y_val),
-    'Predicted': price_scaler.inverse_transform(predicted_val)
-}).to_csv('predictions_with_sentiment.csv', index=False)
+    'Predicted': price_scaler.inverse_transform(predicted_val),
+    'Error': price_scaler.inverse_transform(data_y_val) - price_scaler.inverse_transform(predicted_val),
+    'Error_Percent': ((price_scaler.inverse_transform(data_y_val) - price_scaler.inverse_transform(predicted_val)) 
+                      / price_scaler.inverse_transform(data_y_val) * 100)
+})
+results_df.to_csv('predictions_with_sentiment.csv', index=False)
+
+# Save metrics summary
+metrics_df = pd.DataFrame({
+    'Metric': ['MAE', 'MAPE', 'RMSE', 'R2_Score', 'Direction_Accuracy', 'MPE'],
+    'Train': [train_metrics['MAE'], train_metrics['MAPE'], train_metrics['RMSE'], 
+              train_metrics['R2'], train_metrics['Direction_Accuracy'], train_metrics['MPE']],
+    'Validation': [val_metrics['MAE'], val_metrics['MAPE'], val_metrics['RMSE'], 
+                   val_metrics['R2'], val_metrics['Direction_Accuracy'], val_metrics['MPE']]
+})
+metrics_df.to_csv('model_metrics.csv', index=False)
 
 pd.DataFrame({
     'Next_Day_Price': [next_day_price],
+    'Current_Price': [data_close_price[-1]],
+    'Price_Change': [next_day_price - data_close_price[-1]],
+    'Percent_Change': [(next_day_price - data_close_price[-1]) / data_close_price[-1] * 100],
     'Current_Sentiment': [current_sentiment],
-    'Direction': ['up' if next_day_price > data_close_price[-1] else 'down']
+    'Direction': ['up' if next_day_price > data_close_price[-1] else 'down'],
+    'Model_MAPE': [val_metrics['MAPE']],
+    'Model_Direction_Accuracy': [val_metrics['Direction_Accuracy']]
 }).to_csv('next_day_prediction.csv', index=False)
 
-print("✓ Results saved: predictions_with_sentiment.csv, next_day_prediction.csv")
+print("✓ Results saved:")
+print("  • predictions_with_sentiment.csv (detailed predictions)")
+print("  • model_metrics.csv (performance metrics)")
+print("  • next_day_prediction.csv (tomorrow's forecast)")
