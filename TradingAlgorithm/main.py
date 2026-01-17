@@ -14,7 +14,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
 
 
-MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgortihm\model.pth'
+MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgorithm\model.pth'
+
+
+os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
 # 2. DATA PREPARATION
 ticker = 'AAPL'
@@ -63,8 +66,10 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.01)
 num_epochs = 300 
 
-# 5. LOAD -> TRAIN -> SAVE LOGIC (THE UPDATE CYCLE)
-if os.path.exists(MODEL_PATH):
+# 5. LOAD -> TRAIN -> SAVE LOGIC
+model_exists = os.path.exists(MODEL_PATH)
+
+if model_exists:
     print("--- Loading existing model weights to continue training ---")
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 else:
@@ -83,16 +88,20 @@ for i in range(num_epochs):
     if i % 25 == 0:
         print(f'Epoch {i}, Loss: {loss.item()}')
 
-
+# Save the updated weights
 torch.save(model.state_dict(), MODEL_PATH)
-print(f"Model updated and saved to {MODEL_PATH}")
+
+# Print status message based on whether the file already existed
+if model_exists:
+    print("Updated existing model file.")
+else:
+    print("Created new model file.")
 
 # 6. PREDICTION AND EVALUATION
-model.eval() #
+model.eval() 
 with torch.no_grad():
     y_train_pred = model(X_train)
     y_test_pred = model(X_test)
-
 
 y_train_pred_np = scaler.inverse_transform(y_train_pred.cpu().numpy())
 y_train_np = scaler.inverse_transform(y_train.cpu().numpy())
