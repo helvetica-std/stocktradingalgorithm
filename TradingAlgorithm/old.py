@@ -19,7 +19,7 @@ config = {
         "window_size": 20,
         "train_split_size": 0.80,
         "symbol": "IBM",
-        "period": "max",  # max, 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd
+        "period": "5y",  # max, 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd
     },
     "plots": {
         "xticks_interval": 90, # show a date every 90 days

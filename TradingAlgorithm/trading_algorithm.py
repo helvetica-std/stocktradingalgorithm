@@ -8,6 +8,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import yfinance as yf
+from datetime import datetime, timedelta
 
 print("All libraries loaded")
 
@@ -19,7 +20,7 @@ config = {
         "window_size": 20,
         "train_split_size": 0.80,
         "symbol": ticker,
-        "period": "max",
+        "period": "5y",
     },
     "plots": {
         "xticks_interval": 90,
@@ -45,10 +46,48 @@ config = {
     }
 }
 
-def download_data(config):
+def download_data(config, current_date=None, go_back_by_period=True):
+    """
+    Download historical stock data.
+    """
     print(f"Downloading data for {config['data']['symbol']}...")
+
+    current_date = datetime(2025, 12, 31)
+    if current_date is None:
+        current_date = datetime.now()
+
     ticker_obj = yf.Ticker(config["data"]["symbol"])
-    data = ticker_obj.history(period=config["data"]["period"])
+    
+    if go_back_by_period:
+        # Parse period string and calculate start date
+        period_str = config["data"]["period"]
+        
+        if period_str.endswith('y'):
+            years = int(period_str[:-1])
+            start_date = current_date - timedelta(days=365 * years)
+        elif period_str.endswith('mo'):
+            months = int(period_str[:-2])
+            start_date = current_date - timedelta(days=30 * months)
+        elif period_str.endswith('d'):
+            days = int(period_str[:-1])
+            start_date = current_date - timedelta(days=days)
+        else:
+            # Default to 5 years if period format is not recognized
+            start_date = current_date - timedelta(days=365 * 5)
+        
+        # Fetch data between start_date and current_date
+        data = ticker_obj.history(start=start_date, end=current_date)
+    else:
+        # Fetch data without date constraint
+        data = ticker_obj.history(period=config["data"]["period"])
+    
+    # Handle empty data
+    if data.empty:
+        print(f"Warning: No data retrieved for {config['data']['symbol']}. Retrying with default period...")
+        data = ticker_obj.history(period=config["data"]["period"])
+    
+    if data.empty:
+        raise ValueError(f"Could not fetch data for {config['data']['symbol']}. The ticker may be invalid or delisted.")
     
     data_date = [date.strftime('%Y-%m-%d') for date in data.index]
     data_close_price = data['Close'].values
@@ -235,7 +274,7 @@ for i in range(len(predicted_val)):
     })
 
 validation_df = pd.DataFrame(validation_data)
-validation_df.to_csv('predicted_vs_actual_validation.csv', index=False)
+validation_df.to_csv('../Frontend/predicted_vs_actual_validation.csv', index=False)
 print("Saved to: predicted_vs_actual_validation.csv")
 
 # Predict direction for next month
@@ -256,7 +295,7 @@ for day in range(trading_days_in_month):
     if predicted_normalized_np.ndim == 0:
         predicted_normalized_value = float(predicted_normalized_np)
     else:
-        predicted_normalized_value = float(predicted_normalized_np[0])
+        predicted_normalized_value = float(predicted_normalized_np.item() if predicted_normalized_np.size == 1 else predicted_normalized_np[0])
     
     predicted_price = scaler.inverse_transform(np.array([[predicted_normalized_value]]))[0][0]
     predicted_prices.append(predicted_price)
@@ -276,15 +315,15 @@ print(f"Predicted change: ${price_change:.2f} ({price_change_percent:.2f}%)")
 print(f"Prediction: Stock will go {direction} in the next month")
 
 prediction_df = pd.DataFrame({
-    'Day': range(1, trading_days_in_month + 1),
-    'Predicted_Price': predicted_prices[1:]
+    'Day': range(1, len(predicted_prices) + 1),
+    'Predicted_Price': predicted_prices
 })
-prediction_df.to_csv('next_month_prediction.csv', index=False)
+prediction_df.to_csv('../Frontend/next_month_prediction.csv', index=False)
 print("Saved to: next_month_prediction.csv")
 
 direction_df = pd.DataFrame({
     'Direction': [direction]
 })
-direction_df.to_csv('stock_direction_prediction.csv', index=False)
+direction_df.to_csv('../Frontend/stock_direction_prediction.csv', index=False)
 print(f"Saved direction prediction to: stock_direction_prediction.csv")
 print(f"Direction: {direction}")

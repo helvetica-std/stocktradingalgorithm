@@ -2,12 +2,22 @@ import sys
 import subprocess
 import json
 import os
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 
-app = Flask(__name__)
+# Set up Flask with static and template folders pointing to Frontend directory
+frontend_path = os.path.join(os.path.dirname(__file__), '..', 'Frontend')
+app = Flask(__name__, static_folder=frontend_path, static_url_path='')
 CORS(app)
+
+@app.route('/')
+def serve_index():
+    return send_from_directory(frontend_path, 'index.html')
+
+@app.route('/../Frontend/index.html')
+def serve_static(filename):
+    return send_from_directory(frontend_path, filename)
 
 @app.route('/api/predict', methods=['POST'])
 def predict():

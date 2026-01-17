@@ -60,24 +60,23 @@
     const marginLeft = 60;
 
     // Load and parse CSV data
-    let data = await d3.csv("predicted_vs_actual_validation.csv");
+    let data = await d3.csv("next_month_prediction.csv");
     
-    // Parse dates and convert numeric values
-    data = data.map(d => ({
-        date: new Date(d.Date),
-        actual: parseFloat(d.Actual_Price),
+    // Parse data and convert numeric values
+    data = data.map((d, i) => ({
+        day: parseInt(d.Day),
         predicted: parseFloat(d.Predicted_Price)
     }));
 
     // Declare the x (horizontal position) scale.
-    const x = d3.scaleTime()
-        .domain(d3.extent(data, d => d.date))
+    const x = d3.scaleLinear()
+        .domain(d3.extent(data, d => d.day))
         .range([marginLeft, width - marginRight]);
 
     // Declare the y (vertical position) scale.
     const y = d3.scaleLinear()
-        .domain([d3.min(data, d => Math.min(d.actual, d.predicted)) - 10, 
-                 d3.max(data, d => Math.max(d.actual, d.predicted)) + 10])
+        .domain([d3.min(data, d => d.predicted) - 5, 
+                 d3.max(data, d => d.predicted) + 5])
         .range([height - marginBottom, marginTop]);
 
     // Create the SVG container with better styling.
@@ -118,7 +117,7 @@
         .style("text-anchor", "middle")
         .style("fill", "#94a3b8")
         .style("font-size", "12px")
-        .text("Date");
+        .text("Day");
 
     svg.append("text")
         .attr("class", "axis-label")
@@ -132,20 +131,9 @@
 
     // Line generator
     const line = d3.line()
-        .x(d => x(d.date));
+        .x(d => x(d.day));
 
-    // Draw actual price line with gradient
-    svg.append("path")
-        .datum(data)
-        .attr("fill", "none")
-        .attr("stroke", "#06b6d4")
-        .attr("stroke-width", 2.5)
-        .attr("stroke-linecap", "round")
-        .attr("stroke-linejoin", "round")
-        .attr("d", line.y(d => y(d.actual)))
-        .style("filter", "drop-shadow(0 0 4px rgba(6, 182, 212, 0.3))");
-
-    // Draw predicted price line with gradient
+    // Draw predicted price line
     svg.append("path")
         .datum(data)
         .attr("fill", "none")
@@ -159,32 +147,16 @@
     // Add legend below the x-axis with better styling
     const legendY = height - marginBottom + 40;
     const legendStartX = marginLeft;
-    const legendSpacing = 200;
-    
-    // Actual price legend
-    svg.append("circle")
-        .attr("cx", legendStartX)
-        .attr("cy", legendY)
-        .attr("r", 5)
-        .style("fill", "#06b6d4");
-    
-    svg.append("text")
-        .attr("x", legendStartX + 15)
-        .attr("y", legendY + 4)
-        .style("fill", "#cbd5e1")
-        .style("font-size", "13px")
-        .style("font-weight", "500")
-        .text("Actual Price");
     
     // Predicted price legend
     svg.append("circle")
-        .attr("cx", legendStartX + legendSpacing)
+        .attr("cx", legendStartX)
         .attr("cy", legendY)
         .attr("r", 5)
         .style("fill", "#f59e0b");
     
     svg.append("text")
-        .attr("x", legendStartX + legendSpacing + 15)
+        .attr("x", legendStartX + 15)
         .attr("y", legendY + 4)
         .style("fill", "#cbd5e1")
         .style("font-size", "13px")
