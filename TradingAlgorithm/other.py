@@ -19,7 +19,7 @@ config = {
     "data": {
         "window_size": 20,
         "train_split_size": 0.80,
-        "symbol": "IBM",
+        "symbol": "DJI",  # Dow Jones Industrial Average
         "period": "max",  # max, 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd
     },
     "plots": {
@@ -436,7 +436,6 @@ prediction_df = pd.DataFrame({
 prediction_df.to_csv('next_month_prediction.csv', index=False)
 print("Saved to: next_month_prediction.csv")
 
-# Save simple direction prediction (just "up" or "down") as CSV
 print("\nSaving final month direction prediction...")
 direction_df = pd.DataFrame({
     'Direction': [direction]
