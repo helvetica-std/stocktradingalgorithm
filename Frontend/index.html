@@ -38,14 +38,25 @@
     const marginBottom = 30;
     const marginLeft = 40;
 
+    // Load and parse CSV data
+    let data = await d3.csv("predicted_vs_actual_validation.csv");
+    
+    // Parse dates and convert numeric values
+    data = data.map(d => ({
+        date: new Date(d.Date),
+        actual: parseFloat(d.Actual_Price),
+        predicted: parseFloat(d.Predicted_Price)
+    }));
+
     // Declare the x (horizontal position) scale.
-    const x = d3.scaleUtc()
-        .domain([new Date("2023-01-01"), new Date("2024-01-01")])
+    const x = d3.scaleTime()
+        .domain(d3.extent(data, d => d.date))
         .range([marginLeft, width - marginRight]);
 
     // Declare the y (vertical position) scale.
     const y = d3.scaleLinear()
-        .domain([0, 100])
+        .domain([d3.min(data, d => Math.min(d.actual, d.predicted)) - 10, 
+                 d3.max(data, d => Math.max(d.actual, d.predicted)) + 10])
         .range([height - marginBottom, marginTop]);
 
     // Create the SVG container.
@@ -67,17 +78,25 @@
         .attr("transform", `translate(${marginLeft},0)`)
         .call(d3.axisLeft(y));
 
-    let aapl = d3.csvParse(await d3.text("predicted_vs_actual_validation.csv"));
+    // Line generator
+    const line = d3.line()
+        .x(d => x(d.date));
 
+    // Draw actual price line
     svg.append("path")
-        .datum(aapl)
+        .datum(data)
         .attr("fill", "none")
         .attr("stroke", "steelblue")
         .attr("stroke-width", 1.5)
-        .attr("d", d3.line()
-            .x(d => x(d.date))
-            .y(d => y(d.value))
-        );
+        .attr("d", line.y(d => y(d.actual)));
+
+    // Draw predicted price line
+    svg.append("path")
+        .datum(data)
+        .attr("fill", "none")
+        .attr("stroke", "orange")
+        .attr("stroke-width", 1.5)
+        .attr("d", line.y(d => y(d.predicted)));
 
     // Append the SVG element.
     container.append(svg.node());
