@@ -4,3 +4,5 @@ matplotlib
 yfinance
 torch
 scikit-learn
+flask
+flask-cors
