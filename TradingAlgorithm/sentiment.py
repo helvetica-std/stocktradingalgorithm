@@ -7,7 +7,15 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 import yfinance as yf
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+# Import transformers
+try:
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    print(" Transformers not found.")
+    TRANSFORMERS_AVAILABLE = False
+
 from datetime import datetime, timedelta
 import requests
 import warnings
@@ -39,11 +47,11 @@ if TRANSFORMERS_AVAILABLE:
         finbert_model.eval()
         print("✓ FinBERT loaded successfully")
     except Exception as e:
-        print(f"❌ Error loading FinBERT: {e}")
+        print(f"  Error loading FinBERT: {e}")
         print("   The model will download on first use (~500MB)")
         TRANSFORMERS_AVAILABLE = False
 else:
-    print("⚠️  Transformers not available. Sentiment analysis disabled.")
+    print("   Transformers not available. Sentiment analysis disabled.")
     print("   Install with: pip install transformers torch")
     tokenizer = None
     finbert_model = None
@@ -90,7 +98,7 @@ def fetch_newsapi(symbol, company_name, days_back=7):
     """Fetch from NewsAPI.org - requires free API key"""
     api_key = config["sentiment"]["news_api_key"]
     if api_key == "YOUR_API_KEY_HERE":
-        print("⚠️  Set your NewsAPI key in config. Get free key: https://newsapi.org/")
+        print("   Set your NewsAPI key in config. Get free key: https://newsapi.org/")
         return []
     
     url = "https://newsapi.org/v2/everything"
@@ -121,7 +129,7 @@ def get_news_sentiment(symbol, company_name):
     print(f"\n{'='*70}\nFetching news for {symbol}\n{'='*70}")
     
     if not TRANSFORMERS_AVAILABLE:
-        print("⚠️  Sentiment analysis disabled (transformers not installed)")
+        print("   Sentiment analysis disabled (transformers not installed)")
         print("   Install with: pip install transformers torch")
         return 0.0, []
     
@@ -131,7 +139,7 @@ def get_news_sentiment(symbol, company_name):
         articles = fetch_yahoo_news(symbol)
     
     if not articles:
-        print("⚠️  No articles found. Using neutral sentiment.")
+        print("   No articles found. Using neutral sentiment.")
         return 0.0, []
     
     # Analyze sentiment
@@ -156,7 +164,7 @@ def get_news_sentiment(symbol, company_name):
         pos_pct = sum(1 for s in sentiments if s > 0.1) / len(sentiments) * 100
         neg_pct = sum(1 for s in sentiments if s < -0.1) / len(sentiments) * 100
         print(f"{'-'*70}")
-        print(f"📊 Average: {avg:+.3f} | Positive: {pos_pct:.0f}% | Negative: {neg_pct:.0f}%")
+        print(f"  Average: {avg:+.3f} | Positive: {pos_pct:.0f}% | Negative: {neg_pct:.0f}%")
         print(f"{'='*70}\n")
         return avg, sentiments
     return 0.0, []
@@ -167,7 +175,7 @@ try:
     company_name = ticker_obj.info.get('longName', config["data"]["symbol"])
 except:
     company_name = config["data"]["symbol"]
-print(f"📈 Analyzing: {company_name} ({config['data']['symbol']})")
+print(f"  Analyzing: {company_name} ({config['data']['symbol']})")
 
 # Download price data
 data = ticker_obj.history(period=config["data"]["period"])
@@ -316,7 +324,7 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"], betas=(0.9, 0.98), eps=1e-9)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=config["training"]["scheduler_step_size"], gamma=0.1)
 
-print("\n🚀 Training with price + sentiment...")
+print("\n Training with price + sentiment...")
 for epoch in range(config["training"]["num_epoch"]):
     loss_train, lr = run_epoch(train_dataloader, True)
     loss_val, _ = run_epoch(val_dataloader)
@@ -379,7 +387,7 @@ print("="*70)
 train_metrics = calculate_metrics(data_y_train, predicted_train, price_scaler)
 val_metrics = calculate_metrics(data_y_val, predicted_val, price_scaler)
 
-print("\n📊 TRAINING SET:")
+print("\n TRAINING SET:")
 print(f"   MAE (Mean Absolute Error):        ${train_metrics['MAE']:.2f}")
 print(f"   MAPE (Mean Abs % Error):          {train_metrics['MAPE']:.2f}%")
 print(f"   RMSE (Root Mean Squared Error):   ${train_metrics['RMSE']:.2f}")
@@ -387,7 +395,7 @@ print(f"   R² Score:                         {train_metrics['R2']:.4f} ({train_
 print(f"   Direction Accuracy:               {train_metrics['Direction_Accuracy']:.2f}%")
 print(f"   MPE (Bias):                       {train_metrics['MPE']:.2f}%")
 
-print("\n📈 VALIDATION SET:")
+print("\n VALIDATION SET:")
 print(f"   MAE (Mean Absolute Error):        ${val_metrics['MAE']:.2f}")
 print(f"   MAPE (Mean Abs % Error):          {val_metrics['MAPE']:.2f}%")
 print(f"   RMSE (Root Mean Squared Error):   ${val_metrics['RMSE']:.2f}")
@@ -395,7 +403,7 @@ print(f"   R² Score:                         {val_metrics['R2']:.4f} ({val_metr
 print(f"   Direction Accuracy:               {val_metrics['Direction_Accuracy']:.2f}%")
 print(f"   MPE (Bias):                       {val_metrics['MPE']:.2f}%")
 
-print("\n💡 INTERPRETATION:")
+print("\n INTERPRETATION:")
 print(f"   • MAPE {val_metrics['MAPE']:.1f}% means predictions are off by ~${val_metrics['MAE']:.2f} on average")
 print(f"   • R² of {val_metrics['R2']:.2%} means the model explains {val_metrics['R2']*100:.1f}% of price variance")
 print(f"   • Direction accuracy {val_metrics['Direction_Accuracy']:.1f}% = predicting up/down correctly")
