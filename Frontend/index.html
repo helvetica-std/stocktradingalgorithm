@@ -8,19 +8,14 @@
 </head>
 <body>
     <div id="container">
-        <div class="logo">LOGO</div>
+        <div class="logo"><img src="" alt="Comapny Logo"></div>
     </div>
     <div class="controls">
         <div class="control-group">
-            <span id="fileSpan">+</span>
-            <label>Upload</label>
-        </div>
-        <input type="file" id="uploadBtn">
-        <div class="control-group">
             <div id="daysContainer">
-                <input type="number" id="days" name="days" min="1" max="365" value="1">
+                <input type="text" id="days" name="days" placeholder="e.g., AAPL" value="">
             </div>
-            <label>Days to Predict</label>
+            <label>Stock Ticker</label>
         </div>
         <div class="control-group">
             <button id="processBtn">SUBMIT</button>
@@ -35,7 +30,7 @@
     const height = window.innerHeight * 0.5;
     const marginTop = 20;
     const marginRight = 20;
-    const marginBottom = 30;
+    const marginBottom = 40;
     const marginLeft = 40;
 
     // Load and parse CSV data
@@ -98,9 +93,42 @@
         .attr("stroke-width", 1.5)
         .attr("d", line.y(d => y(d.predicted)));
 
-    // Append the SVG element.
+    // Add legend below the x-axis
+    const legendY = height - marginBottom + 30;
+    const legendStartX = width / 2 - 120;
+    
+    // Actual price legend
+    svg.append("circle")
+        .attr("cx", legendStartX)
+        .attr("cy", legendY)
+        .attr("r", 6)
+        .style("fill", "steelblue");
+    
+    svg.append("text")
+        .attr("x", legendStartX + 15)
+        .attr("y", legendY + 5)
+        .style("fill", "#e0e0e0")
+        .style("font-size", "12px")
+        .text("Actual Price");
+    
+    // Predicted price legend
+    svg.append("circle")
+        .attr("cx", legendStartX + 150)
+        .attr("cy", legendY)
+        .attr("r", 6)
+        .style("fill", "orange");
+    
+    svg.append("text")
+        .attr("x", legendStartX + 165)
+        .attr("y", legendY + 5)
+        .style("fill", "#e0e0e0")
+        .style("font-size", "12px")
+        .text("Predicted Price");
+
+    // Append the SVG element
     container.append(svg.node());
 
     </script>
+    <script src="script.js"></script>
 </body>
 </html>
