@@ -67,6 +67,18 @@
         .attr("transform", `translate(${marginLeft},0)`)
         .call(d3.axisLeft(y));
 
+    let aapl = d3.csvParse(await d3.text("predicted_vs_actual_validation.csv"));
+
+    svg.append("path")
+        .datum(aapl)
+        .attr("fill", "none")
+        .attr("stroke", "steelblue")
+        .attr("stroke-width", 1.5)
+        .attr("d", d3.line()
+            .x(d => x(d.date))
+            .y(d => y(d.value))
+        );
+
     // Append the SVG element.
     container.append(svg.node());
 
