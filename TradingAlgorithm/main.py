@@ -14,7 +14,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
 
 
-MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgorithm\model.pth'
+MODEL_PATH = r'C:\Users\sed35\OneDrive\Desktop\Programming Folders\Trading Predictions\stocktradingalgorithm\TradingAlgorithm\tradingmodel.pth'
 
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
