@@ -6,128 +6,137 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import root_mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import root_mean_squared_error # Importing the metric
 
-# 1. SETUP DEVICE AND PATHS
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'Using device: {device}')
-
-
-MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgorithm\model.pth'
-
-
+# 1.
+try:
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print("Using GPU: " + torch.cuda.get_device_name(0))
+    else:
+        device = torch.device('cpu')
+        print("Using CPU (CUDA not available)")
+except Exception:
+    device = torch.device('cpu')
+    print("Using CPU (Error in CUDA initialization)")
+MODEL_PATH = r'C:\Users\chrit\OneDrive\Documents\GitHub\stocktradingalgorithm\TradingAlgorithm\model_returns.pth'
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
 # 2. DATA PREPARATION
 ticker = 'AAPL'
-df = yf.download(ticker, start='2020-01-01')
+df_daily = yf.download(ticker, start='2000-01-01')
 
-scaler = StandardScaler()
-df_scaled = scaler.fit_transform(df[['Close']])
+# Calculate Monthly Log Returns
+df_monthly = df_daily['Close'].resample('ME').last()
+df_returns = np.log(df_monthly / df_monthly.shift(1)).dropna()
 
-seq_length = 60
-data_x = []
-data_y = []
+# Supporting features
+df_features = pd.DataFrame(index=df_returns.index)
+df_features['Returns'] = df_returns
+df_features['Vol_Change'] = df_daily['Volume'].resample('ME').sum().pct_change()
+df_features['Range'] = ((df_daily['High'] - df_daily['Low']) / df_daily['Close']).resample('ME').mean()
+df_features.dropna(inplace=True)
 
-for i in range(len(df_scaled) - seq_length):
-    data_x.append(df_scaled[i : i + seq_length - 1]) 
-    data_y.append(df_scaled[i + seq_length - 1])     
+# 3. SCALING
+scaler = MinMaxScaler(feature_range=(-1, 1))
+scaled_data = scaler.fit_transform(df_features)
 
-data_x = np.array(data_x)
-data_y = np.array(data_y)
+seq_length = 12 
+X, y = [], []
 
-train_size = int(0.8 * len(data_x))
+for i in range(len(scaled_data) - seq_length):
+    X.append(scaled_data[i : i + seq_length])
+    y.append(scaled_data[i + seq_length, 0])
 
-X_train = torch.from_numpy(data_x[:train_size]).type(torch.Tensor).to(device)
-y_train = torch.from_numpy(data_y[:train_size]).type(torch.Tensor).to(device)
-X_test = torch.from_numpy(data_x[train_size:]).type(torch.Tensor).to(device)
-y_test = torch.from_numpy(data_y[train_size:]).type(torch.Tensor).to(device)
+X = np.array(X)
+y = np.array(y)
 
-# 3. MODEL DEFINITION
-class PredictionModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
-        super(PredictionModel, self).__init__()
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+train_size = int(0.8 * len(X))
+X_train = torch.FloatTensor(X[:train_size]).to(device)
+y_train = torch.FloatTensor(y[:train_size]).unsqueeze(1).to(device)
+X_test = torch.FloatTensor(X[train_size:]).to(device)
+y_test = torch.FloatTensor(y[train_size:]).unsqueeze(1).to(device)
+
+# 4. MODEL
+class ReturnPredictor(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers):
+        super(ReturnPredictor, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=0.2)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, 32),
+            nn.LeakyReLU(),
+            nn.Linear(32, 1)
+        )
 
     def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim, device=device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim, device=device)
-        out, (hn, cn) = self.lstm(x, (h0.detach(), c0.detach()))
-        out = self.fc(out[:, -1, :])
-        return out
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :])
 
-# 4. INITIALIZE MODEL, LOSS, AND OPTIMIZER
-model = PredictionModel(input_dim=1, hidden_dim=32, num_layers=2, output_dim=1).to(device)
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
-num_epochs = 300 
+model = ReturnPredictor(3, 64, 2).to(device)
+criterion = nn.HuberLoss() 
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# 5. LOAD -> TRAIN -> SAVE LOGIC
-model_exists = os.path.exists(MODEL_PATH)
-
-if model_exists:
-    print("--- Loading existing model weights to continue training ---")
+# 5. TRAINING
+if os.path.exists(MODEL_PATH):
+    print("--- Loading existing model weights ---")
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-else:
-    print("--- No saved model found. Training new model from scratch ---")
 
-print(f"Training/Updating model for {num_epochs} epochs...")
-model.train() 
-for i in range(num_epochs):
-    y_train_pred = model(X_train)
-    loss = criterion(y_train_pred, y_train)
-
+model.train()
+for epoch in range(500):
     optimizer.zero_grad()
+    pred = model(X_train)
+    loss = criterion(pred, y_train)
     loss.backward()
     optimizer.step()
-    
-    if i % 25 == 0:
-        print(f'Epoch {i}, Loss: {loss.item()}')
+    if epoch % 100 == 0: print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
 
-# Save the updated weights
 torch.save(model.state_dict(), MODEL_PATH)
 
-# Print status message based on whether the file already existed
-if model_exists:
-    print("Updated existing model file.")
-else:
-    print("Created new model file.")
-
-# 6. PREDICTION AND EVALUATION
-model.eval() 
+# 6. EVALUATION & RMSE CALCULATION
+model.eval()
 with torch.no_grad():
-    y_train_pred = model(X_train)
-    y_test_pred = model(X_test)
+    test_preds_scaled = model(X_test).cpu().numpy()
+    dummy = np.zeros((len(test_preds_scaled), 3))
+    dummy[:, 0] = test_preds_scaled.ravel()
+    pred_log_returns = scaler.inverse_transform(dummy)[:, 0].ravel()
+num_preds = len(pred_log_returns)
+actual_prices_test = df_monthly.iloc[-num_preds:].values.ravel()
+previous_actual_prices = df_monthly.iloc[-num_preds-1 : -1].values.ravel()
+min_len = min(len(actual_prices_test), len(previous_actual_prices), len(pred_log_returns))
+actual_prices_test = actual_prices_test[:min_len]
+previous_actual_prices = previous_actual_prices[:min_len]
+pred_log_returns = pred_log_returns[:min_len]
+predicted_prices = previous_actual_prices * np.exp(pred_log_returns)
 
-y_train_pred_np = scaler.inverse_transform(y_train_pred.cpu().numpy())
-y_train_np = scaler.inverse_transform(y_train.cpu().numpy())
-y_test_pred_np = scaler.inverse_transform(y_test_pred.cpu().numpy())
-y_test_np = scaler.inverse_transform(y_test.cpu().numpy())
+# 7. FINAL METRICS
+rmse = root_mean_squared_error(actual_prices_test, predicted_prices)
 
-train_rmse = root_mean_squared_error(y_train_np, y_train_pred_np)
-test_rmse = root_mean_squared_error(y_test_np, y_test_pred_np)
+print("-" * 30)
+print(f"ROOT MEAN SQUARE ERROR (RMSE): ${rmse:.2f}")
+print(f"Mean Stock Price in Test Set: ${np.mean(actual_prices_test):.2f}")
+print(f"Error Percentage: {(rmse / np.mean(actual_prices_test)) * 100:.2f}%")
+print("-" * 30)
+# 8. PLOTTING
+plt.figure(figsize=(12,7))
 
-print(f"Train RMSE: {train_rmse:.4f}")
-print(f"Test RMSE: {test_rmse:.4f}")
+# Main Price Chart
+plt.subplot(2, 1, 1)
+test_dates = df_monthly.index[train_size + seq_length + 1:]
+plt.plot(test_dates, actual_prices_test, label="Actual Price", color='blue', linewidth=2)
+plt.plot(test_dates, predicted_prices, label="One-Step Prediction", color='red', linestyle='--', alpha=0.8)
+plt.title(f"{ticker} Optimized Price Prediction (Monthly)")
+plt.ylabel("Price ($)")
+plt.legend()
 
-# 7. PLOTTING
-fig = plt.figure(figsize=(12,10))
-gs = fig.add_gridspec(4,1)
+# Error Chart
+plt.subplot(2, 1, 2)
+errors = actual_prices_test - predicted_prices
+plt.fill_between(test_dates, errors, color='red', alpha=0.3, label='Price Error')
+plt.axhline(0, color='black', lw=1)
+plt.ylabel("Error ($)")
+plt.xlabel("Date")
+plt.legend()
 
-ax1 = fig.add_subplot(gs[:3,0])
-test_dates = df.index[-len(y_test_np):]
-ax1.plot(test_dates, y_test_np, color='blue', label='Actual Price')
-ax1.plot(test_dates, y_test_pred_np, color='green', label='Predicted Price')
-ax1.legend()
-plt.title(f"{ticker} Stock Price Prediction (Updated Model)")
-
-ax2 = fig.add_subplot(gs[3,0])
-ax2.axhline(test_rmse, color='blue', linestyle='--', label='RMSE')
-ax2.plot(test_dates, abs(y_test_np - y_test_pred_np), 'r', label='Prediction Error')
-ax2.legend()
 plt.tight_layout()
 plt.show()
