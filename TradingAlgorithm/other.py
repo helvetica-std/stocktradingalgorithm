@@ -38,9 +38,9 @@ config = {
     "training": {
         "device": "cpu", # "cuda" or "cpu"
         "batch_size": 64,
-        "num_epoch": 100,
+        "num_epoch": 30,
         "learning_rate": 0.01,
-        "scheduler_step_size": 40,
+        "scheduler_step_size": 15,
     }
 }
 
@@ -350,7 +350,7 @@ to_plot_data_y_test_pred = np.zeros(plot_range)
 to_plot_data_y_val[:plot_range-1] = scaler.inverse_transform(data_y_val)[-plot_range+1:]
 to_plot_data_y_val_pred[:plot_range-1] = scaler.inverse_transform(predicted_val)[-plot_range+1:]
 
-to_plot_data_y_test_pred[plot_range-1] = scaler.inverse_transform(prediction)
+to_plot_data_y_test_pred[plot_range-1] = scaler.inverse_transform(prediction)[0]
 
 to_plot_data_y_val = np.where(to_plot_data_y_val == 0, None, to_plot_data_y_val)
 to_plot_data_y_val_pred = np.where(to_plot_data_y_val_pred == 0, None, to_plot_data_y_val_pred)
