@@ -18,6 +18,7 @@ config = {
         "train_split_size": 0.80,
         "symbol": "DJI",  # Dow Jones Industrial Average
         "period": "max",  # max, 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd
+        "predict_days_ahead": 1,  # Predict 1 day ahead
     },
     "plots": {
         "xticks_interval": 90,
@@ -116,8 +117,31 @@ class Normalizer():
 scaler = Normalizer()
 normalized_features = scaler.fit_transform(data_features)
 
+# Validate normalized features
+if np.any(np.isnan(normalized_features)) or np.any(np.isinf(normalized_features)):
+    print("Warning: NaN or Inf values detected in normalized features. Replacing with 0...")
+    normalized_features = np.nan_to_num(normalized_features, nan=0.0, posinf=0.0, neginf=0.0)
+
+print(f"Normalized features shape: {normalized_features.shape}")
+print(f"Normalized features stats: min={normalized_features.min():.4f}, max={normalized_features.max():.4f}, mean={normalized_features.mean():.4f}")
+
 def prepare_data_x(x, window_size):
+    # Ensure x is a 2D array
+    if x.ndim == 1:
+        x = x.reshape(-1, 1)
+    
+    # Check if we have enough data
+    if x.shape[0] < window_size:
+        raise ValueError(f"Not enough data points. Need at least {window_size}, got {x.shape[0]}")
+    
     n_row = x.shape[0] - window_size + 1
+    if n_row <= 0:
+        raise ValueError(f"Window size {window_size} is too large for data of length {x.shape[0]}")
+    
+    # Ensure x is contiguous for as_strided
+    if not x.flags['C_CONTIGUOUS']:
+        x = np.ascontiguousarray(x)
+    
     output = np.lib.stride_tricks.as_strided(x, shape=(n_row, window_size, x.shape[1]), 
                                               strides=(x.strides[0], x.strides[0], x.strides[1]))
     return output[:-1], output[-1]
@@ -135,6 +159,15 @@ data_y = prepare_data_y(data_close_price, window_size=config["data"]["window_siz
 
 print(f"Data X shape: {data_x.shape}")
 print(f"Data Y shape: {data_y.shape}")
+
+# Validate shapes match
+if data_x.shape[0] != data_y.shape[0]:
+    raise ValueError(f"Shape mismatch: data_x has {data_x.shape[0]} samples but data_y has {data_y.shape[0]} samples")
+
+# Ensure data_y is 1D
+if data_y.ndim > 1:
+    data_y = data_y.flatten()
+    print(f"Flattened data_y to shape: {data_y.shape}")
 
 split_index = int(data_y.shape[0]*config["data"]["train_split_size"])
 data_x_train = data_x[:split_index]
@@ -175,7 +208,7 @@ if config["training"]["use_class_weights"]:
     sample_weights = [class_weights[cls] for cls in train_directions]
     sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
     train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], sampler=sampler)
-    print("✅ Using weighted sampling to balance UP/DOWN training")
+    print("Using weighted sampling to balance UP/DOWN training")
 else:
     train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True)
 
@@ -333,7 +366,7 @@ actual_directions = np.sign(actual_val_returns)
 predicted_directions = np.sign(predicted_val_returns)
 direction_accuracy = np.mean(actual_directions == predicted_directions) * 100
 
-print(f"\n⭐ DIRECTION ACCURACY: {direction_accuracy:.2f}%")
+print(f"\n DIRECTION ACCURACY: {direction_accuracy:.2f}%")
 print(f"   (Random = 50%, Good = 55-60%, Excellent = 60%+)")
 
 correct_up = np.sum((actual_directions > 0) & (predicted_directions > 0))
@@ -356,9 +389,9 @@ print(f"  Actual DOWN: {total_down} times ({100*total_down/len(actual_directions
 
 bias_diff = abs(predicted_up_count/len(predicted_directions) - total_up/len(actual_directions))
 if bias_diff > 0.15:
-    print(f"  ⚠️ WARNING: Model has {bias_diff*100:.1f}% prediction bias!")
+    print(f"  WARNING: Model has {bias_diff*100:.1f}% prediction bias!")
 else:
-    print(f"  ✅ Model predictions are well-balanced!")
+    print(f"  Model predictions are well-balanced!")
 
 # Trading simulation
 returns_if_traded = []
@@ -382,11 +415,11 @@ if len(returns_if_traded) > 0:
     print(f"  Total return: {total_return*100:.2f}%")
     
     if sharpe > 1.0:
-        print(f"  ✅ Good Sharpe - model shows promise!")
+        print(f"   Good Sharpe - model shows promise!")
     elif sharpe > 0.5:
-        print(f"  ⚠️ Moderate Sharpe - better than random")
+        print(f"   Moderate Sharpe - better than random")
     else:
-        print(f"  ❌ Low Sharpe - marginal improvement")
+        print(f"   Low Sharpe - marginal improvement")
 
 print("="*50 + "\n")
 
@@ -407,56 +440,32 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
+# Predict next day
 model.eval()
 
-x = torch.tensor(data_x_unseen).float().to(config["training"]["device"]).unsqueeze(0).unsqueeze(2) # this is the data type and shape required, [batch, sequence, feature]
-prediction = model(x)
-prediction = prediction.cpu().detach().numpy()
+x = torch.tensor(data_x_unseen).float().to(config["training"]["device"]).unsqueeze(0)  # [batch, sequence, features]
+with torch.no_grad():
+    predicted_return = model(x)
+predicted_return = predicted_return.cpu().detach().numpy()[0]
 
-# prepare plots
+# Convert return to price
+last_price = data_close_price[-1]
+predicted_next_price = last_price * (1 + predicted_return)
 
-plot_range = 10
-to_plot_data_y_val = np.zeros(plot_range)
-to_plot_data_y_val_pred = np.zeros(plot_range)
-to_plot_data_y_test_pred = np.zeros(plot_range)
-
-to_plot_data_y_val[:plot_range-1] = scaler.inverse_transform(data_y_val)[-plot_range+1:]
-to_plot_data_y_val_pred[:plot_range-1] = scaler.inverse_transform(predicted_val)[-plot_range+1:]
-
-to_plot_data_y_test_pred[plot_range-1] = scaler.inverse_transform(prediction)[0]
-
-to_plot_data_y_val = np.where(to_plot_data_y_val == 0, None, to_plot_data_y_val)
-to_plot_data_y_val_pred = np.where(to_plot_data_y_val_pred == 0, None, to_plot_data_y_val_pred)
-to_plot_data_y_test_pred = np.where(to_plot_data_y_test_pred == 0, None, to_plot_data_y_test_pred)
-
-# plot
-
-plot_date_test = data_date[-plot_range+1:]
-plot_date_test.append("tomorrow")
-
-fig = figure(figsize=(25, 5), dpi=80)
-fig.patch.set_facecolor((1.0, 1.0, 1.0))
-plt.plot(plot_date_test, to_plot_data_y_val, label="Actual prices", marker=".", markersize=10, color=config["plots"]["color_actual"])
-plt.plot(plot_date_test, to_plot_data_y_val_pred, label="Past predicted prices", marker=".", markersize=10, color=config["plots"]["color_pred_val"])
-plt.plot(plot_date_test, to_plot_data_y_test_pred, label="Predicted price for next day", marker=".", markersize=20, color=config["plots"]["color_pred_test"])
-plt.title("Predicting the close price of the next trading day")
-plt.grid(which='major', axis='y', linestyle='--')
-plt.legend()
-plt.show()
-
-print("Predicted close price of the next trading day:", round(to_plot_data_y_test_pred[plot_range-1], 2))
+print(f"Predicted close price of the next trading day: ${predicted_next_price:.2f}")
+print(f"Predicted return: {predicted_return*100:.2f}%")
 
 # Save predicted vs actual validation data to CSV
 print("\nSaving predicted vs actual validation data to CSV...")
 # Ensure data is properly formatted as arrays
-actual_prices = np.array(to_plot_data_y_val_subset).flatten()
-predicted_prices = np.array(to_plot_predicted_val).flatten()
-dates = np.array(to_plot_data_date).flatten()
+actual_prices_array = np.array(actual_val_prices).flatten()
+predicted_prices_array = np.array(predicted_val_prices).flatten()
+dates_array = np.array(val_dates).flatten()
 
 validation_df = pd.DataFrame({
-    'Date': dates,
-    'Actual_Price': actual_prices,
-    'Predicted_Price': predicted_prices
+    'Date': dates_array,
+    'Actual_Price': actual_prices_array,
+    'Predicted_Price': predicted_prices_array
 })
 validation_df.to_csv('predicted_vs_actual_validation.csv', index=False)
 print("Saved to: predicted_vs_actual_validation.csv")
@@ -466,27 +475,41 @@ print(f"Saved {len(validation_df)} rows of predicted vs actual data")
 print("\nPredicting next month stock movement...")
 model.eval()
 
-# Start with the last window of data
+# Start with the last window of normalized features
 current_window = data_x_unseen.copy()
-predictions_next_month = []
+predicted_returns = []
 trading_days_in_month = 22  # Approximate trading days in a month
 
-for day in range(trading_days_in_month):
-    x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0).unsqueeze(2)
-    prediction = model(x)
-    prediction_value = prediction.cpu().detach().numpy()[0]
-    predictions_next_month.append(prediction_value)
-    
-    # Update window: remove first element and add prediction
-    current_window = np.append(current_window[1:], prediction_value)
+# Track prices for feature calculation
+predicted_prices = [data_close_price[-1]]  # Start with last actual price
 
-# Inverse transform predictions
-predictions_next_month_actual = scaler.inverse_transform(np.array(predictions_next_month).reshape(-1, 1)).flatten()
+for day in range(trading_days_in_month):
+    x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0)
+    with torch.no_grad():
+        predicted_return = model(x)
+    predicted_return_value = predicted_return.cpu().detach().numpy()[0]
+    predicted_returns.append(predicted_return_value)
+    
+    # Calculate next price from return
+    next_price = predicted_prices[-1] * (1 + predicted_return_value)
+    predicted_prices.append(next_price)
+    
+    # Create new feature row (simplified - using predicted return as proxy for features)
+    # In a real scenario, you'd recalculate all features from the new price
+    # For now, we'll use a simplified approach: shift window and add new normalized features
+    # This is approximate but functional
+    new_features = current_window[-1].copy()  # Start with last features
+    # Update with new return-based features (simplified)
+    new_features[0] = predicted_return_value  # returns
+    # Other features would need to be recalculated, but for prediction we'll approximate
+    
+    # Update window: remove first element and add new features
+    current_window = np.vstack([current_window[1:], new_features])
 
 # Get the last actual price
 last_actual_price = data_close_price[-1]
 # Get the predicted price at the end of next month
-predicted_price_end_month = predictions_next_month_actual[-1]
+predicted_price_end_month = predicted_prices[-1]
 
 # Determine if stock will go up or down
 price_change = predicted_price_end_month - last_actual_price
@@ -502,7 +525,7 @@ print(f"Prediction: Stock will go {direction} in the next month")
 print("\nSaving next month prediction to CSV...")
 prediction_df = pd.DataFrame({
     'Day': range(1, trading_days_in_month + 1),
-    'Predicted_Price': predictions_next_month_actual
+    'Predicted_Price': predicted_prices[1:]  # Skip first element (starting price)
 })
 prediction_df.to_csv('next_month_prediction.csv', index=False)
 print("Saved to: next_month_prediction.csv")
