@@ -206,13 +206,15 @@ if config["training"]["use_class_weights"]:
     class_counts = Counter(train_directions)
     class_weights = {cls: 1.0/count for cls, count in class_counts.items()}
     sample_weights = [class_weights[cls] for cls in train_directions]
-    sampler = WeightedRandomSampler(sample_weights, len(sample_weights))
-    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], sampler=sampler)
+    # Convert to torch tensor and ensure proper type
+    sample_weights = torch.DoubleTensor(sample_weights)
+    sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], sampler=sampler, num_workers=0)
     print("Using weighted sampling to balance UP/DOWN training")
 else:
-    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True)
+    train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=0)
 
-val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=True)
+val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=0)
 
 class LSTMModel(nn.Module):
     def __init__(self, input_size=1, hidden_layer_size=32, num_layers=2, output_size=1, dropout=0.2):
@@ -243,8 +245,13 @@ class LSTMModel(nn.Module):
         x = h_n[-1]
         
         # Only apply batch norm during training with batch size > 1
+        # Batch norm requires batch size > 1, so skip if batch size is 1
         if self.training and x.shape[0] > 1:
-            x = self.bn(x)
+            try:
+                x = self.bn(x)
+            except RuntimeError:
+                # Skip batch norm if it fails (e.g., batch size 1)
+                pass
         
         x = self.dropout(x)
         predictions = self.linear(x)
@@ -252,6 +259,7 @@ class LSTMModel(nn.Module):
 
 def run_epoch(dataloader, is_training=False):
     epoch_loss = 0
+    num_batches = len(dataloader)
 
     if is_training:
         model.train()
@@ -259,24 +267,28 @@ def run_epoch(dataloader, is_training=False):
         model.eval()
 
     for idx, (x, y) in enumerate(dataloader):
-        if is_training:
-            optimizer.zero_grad()
+        try:
+            if is_training:
+                optimizer.zero_grad()
 
-        batchsize = x.shape[0]
+            batchsize = x.shape[0]
 
-        x = x.to(config["training"]["device"])
-        y = y.to(config["training"]["device"])
+            x = x.to(config["training"]["device"])
+            y = y.to(config["training"]["device"])
 
-        out = model(x)
-        loss = criterion(out, y)
+            out = model(x)
+            loss = criterion(out, y)
 
-        if is_training:
-            loss.backward()
-            # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            if is_training:
+                loss.backward()
+                # Gradient clipping to prevent exploding gradients
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
-        epoch_loss += (loss.detach().item() / batchsize)
+            epoch_loss += (loss.detach().item() / batchsize)
+        except Exception as e:
+            print(f"\nError in batch {idx+1}/{num_batches}: {e}")
+            raise
 
     lr = scheduler.get_last_lr()[0]
 
@@ -300,8 +312,11 @@ patience = 15
 patience_counter = 0
 
 for epoch in range(config["training"]["num_epoch"]):
+    print(f"Epoch {epoch+1}/{config['training']['num_epoch']} - Training...", end=' ', flush=True)
     loss_train, lr_train = run_epoch(train_dataloader, is_training=True)
+    print("Done. Validating...", end=' ', flush=True)
     loss_val, lr_val = run_epoch(val_dataloader)
+    print("Done.")
     scheduler.step()
     
     if loss_val < best_val_loss:
@@ -314,9 +329,9 @@ for epoch in range(config["training"]["num_epoch"]):
         print(f"Early stopping at epoch {epoch+1}")
         break
 
-    if (epoch + 1) % 5 == 0 or epoch == 0:
-        print('Epoch[{}/{}] | loss train:{:.6f}, val:{:.6f} | lr:{:.6f}'
-              .format(epoch + 1, config["training"]["num_epoch"], loss_train, loss_val, lr_train))
+    # Print every epoch for better visibility
+    print('Epoch[{}/{}] | loss train:{:.6f}, val:{:.6f} | lr:{:.6f} | patience:{}/{}'
+          .format(epoch + 1, config["training"]["num_epoch"], loss_train, loss_val, lr_train, patience_counter, patience))
 
 print("="*50)
 print("TRAINING COMPLETED")
