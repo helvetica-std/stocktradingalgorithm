@@ -129,13 +129,7 @@ def get_top_articles(results: List[Dict], top_n: int = 5) -> List[Dict]:
 # CSV EXPORT
 # =========================
 
-def save_results_to_csv(ticker: str, results: Dict, output_dir: str = "outputs") -> str:
-    os.makedirs(output_dir, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{ticker}_sentiment_{timestamp}.csv"
-    filepath = os.path.join(output_dir, filename)
-
+def save_results_to_csv(results: Dict, filename: str = "sentiment_results.csv") -> str:
     fieldnames = [
         "ticker",
         "timestamp",
@@ -148,13 +142,15 @@ def save_results_to_csv(ticker: str, results: Dict, output_dir: str = "outputs")
         "negative_score",
     ]
 
-    with open(filepath, "w", newline="", encoding="utf-8") as f:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
         for a in results["all_articles"]:
             writer.writerow({
-                "ticker": ticker,
+                "ticker": results["ticker"],
                 "timestamp": timestamp,
                 "title": a["title"],
                 "source": a["source"],
@@ -165,7 +161,7 @@ def save_results_to_csv(ticker: str, results: Dict, output_dir: str = "outputs")
                 "negative_score": round(a["scores"]["negative"], 4),
             })
 
-    return filepath
+    return os.path.abspath(filename)
 
 # =========================
 # ENTRY POINT
@@ -186,7 +182,7 @@ if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "IBM"
     result = run_analysis(ticker)
 
-    csv_path = save_results_to_csv(ticker, result)
+    csv_path = save_results_to_csv(result)
 
     print("\nOverall Sentiment (%)")
     print("=====================")
