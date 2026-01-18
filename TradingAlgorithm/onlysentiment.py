@@ -187,7 +187,11 @@ if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "IBM"
     result = run_analysis(ticker)
 
-    csv_path = save_results_to_csv(result)
+    # Save to Frontend directory
+    frontend_path = os.path.join(os.path.dirname(__file__), '..', 'Frontend')
+    os.makedirs(frontend_path, exist_ok=True)
+    csv_filename = os.path.join(frontend_path, "sentiment_results.csv")
+    csv_path = save_results_to_csv(result, filename=csv_filename)
 
     print("\nOverall Sentiment (%)")
     print("=====================")

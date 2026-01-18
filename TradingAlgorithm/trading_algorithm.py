@@ -52,7 +52,6 @@ def download_data(config, current_date=None, go_back_by_period=True):
     """
     print(f"Downloading data for {config['data']['symbol']}...")
 
-    current_date = datetime(2025, 12, 31)
     if current_date is None:
         current_date = datetime.now()
 

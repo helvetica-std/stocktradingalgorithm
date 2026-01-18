@@ -68,10 +68,11 @@ def predict():
         
         print(f"Sentiment script output: {result_sentiment.stdout}")
         
-        # Read the generated CSV files
-        validation_csv_path = os.path.join(os.path.dirname(__file__), 'predicted_vs_actual_validation.csv')
-        sentiment_csv_path = os.path.join(os.path.dirname(__file__), 'sentiment_results.csv')
-        next_month_csv_path = os.path.join(os.path.dirname(__file__), 'next_month_prediction.csv')
+        # Read the generated CSV files from Frontend directory
+        frontend_path = os.path.join(os.path.dirname(__file__), '..', 'Frontend')
+        validation_csv_path = os.path.join(frontend_path, 'predicted_vs_actual_validation.csv')
+        sentiment_csv_path = os.path.join(frontend_path, 'sentiment_results.csv')
+        next_month_csv_path = os.path.join(frontend_path, 'next_month_prediction.csv')
         
         if not os.path.exists(validation_csv_path):
             return jsonify({'error': 'Prediction CSV file not generated'}), 500
