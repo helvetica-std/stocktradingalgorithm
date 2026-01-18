@@ -20,7 +20,7 @@ config = {
         "window_size": 20,
         "train_split_size": 0.80,
         "symbol": ticker,
-        "period": "5y",
+        "period": "max",
     },
     "plots": {
         "xticks_interval": 90,
