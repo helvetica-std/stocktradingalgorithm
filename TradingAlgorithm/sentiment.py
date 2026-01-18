@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import pandas as pd
 import torch
@@ -13,7 +14,7 @@ try:
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    print(" Transformers not found.")
+    print("⚠ Transformers not found.")
     TRANSFORMERS_AVAILABLE = False
 
 from datetime import datetime, timedelta
@@ -23,8 +24,24 @@ warnings.filterwarnings('ignore')
 
 print("Core libraries loaded")
 
+# Get ticker from command line argument or use default
+ticker = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
+
+# Get target date from command line (format: YYYY-MM-DD) or use current date
+target_date_str = sys.argv[2] if len(sys.argv) > 2 else None
+if target_date_str:
+    try:
+        target_date = datetime.strptime(target_date_str, '%Y-%m-%d')
+        print(f"📅 Using target date: {target_date.strftime('%Y-%m-%d')}")
+    except ValueError:
+        print(f"⚠ Invalid date format '{target_date_str}'. Use YYYY-MM-DD. Using current date.")
+        target_date = datetime.now()
+else:
+    target_date = datetime.now()
+    print(f"📅 Using current date: {target_date.strftime('%Y-%m-%d')}")
+
 config = {
-    "data": {"window_size": 20, "train_split_size": 0.80, "symbol": "IBM", "period": "max"},
+    "data": {"window_size": 20, "train_split_size": 0.80, "symbol": ticker, "period": "max", "target_date": target_date},
     "plots": {"xticks_interval": 90, "color_actual": "#001f3f", "color_train": "#3D9970", 
               "color_val": "#0074D9", "color_pred_train": "#3D9970", "color_pred_val": "#0074D9", 
               "color_pred_test": "#FF4136"},
@@ -33,7 +50,7 @@ config = {
                  "scheduler_step_size": 40},
     "sentiment": {
         "model_name": "ProsusAI/finbert",
-        "news_api_key": "f18c946706924f6f8f864648b5338afd",  # Get free from newsapi.org
+        "news_api_key": "f18c946706924f6f8f864648b5338afd",
         "use_real_api": True
     }
 }
@@ -47,19 +64,19 @@ if TRANSFORMERS_AVAILABLE:
         finbert_model.eval()
         print("✓ FinBERT loaded successfully")
     except Exception as e:
-        print(f"  Error loading FinBERT: {e}")
-        print("   The model will download on first use (~500MB)")
+        print(f"⚠ Error loading FinBERT: {e}")
+        print("  The model will download on first use (~500MB)")
         TRANSFORMERS_AVAILABLE = False
 else:
-    print("   Transformers not available. Sentiment analysis disabled.")
-    print("   Install with: pip install transformers torch")
+    print("⚠ Transformers not available. Sentiment analysis disabled.")
+    print("  Install with: pip install transformers torch")
     tokenizer = None
     finbert_model = None
 
 def get_sentiment_score(text):
     """Analyze sentiment using FinBERT. Returns score from -1 to 1."""
     if not TRANSFORMERS_AVAILABLE or tokenizer is None or finbert_model is None:
-        return 0.0  # Return neutral if transformers not available
+        return 0.0
     
     if not text or len(text.strip()) == 0:
         return 0.0
@@ -94,18 +111,22 @@ def fetch_yahoo_news(symbol, max_articles=30):
         print(f"Yahoo Finance error: {e}")
         return []
 
-def fetch_newsapi(symbol, company_name, days_back=7):
+def fetch_newsapi(symbol, company_name, days_back=7, target_date=None):
     """Fetch from NewsAPI.org - requires free API key"""
     api_key = config["sentiment"]["news_api_key"]
     if api_key == "YOUR_API_KEY_HERE":
-        print("   Set your NewsAPI key in config. Get free key: https://newsapi.org/")
+        print("⚠ Set your NewsAPI key in config. Get free key: https://newsapi.org/")
         return []
+    
+    # Use target_date if provided, otherwise use current date
+    end_date = target_date if target_date else datetime.now()
+    start_date = end_date - timedelta(days=days_back)
     
     url = "https://newsapi.org/v2/everything"
     params = {
         'q': f"{company_name} OR {symbol}",
-        'from': (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d'),
-        'to': datetime.now().strftime('%Y-%m-%d'),
+        'from': start_date.strftime('%Y-%m-%d'),
+        'to': end_date.strftime('%Y-%m-%d'),
         'language': 'en',
         'sortBy': 'relevancy',
         'apiKey': api_key,
@@ -124,22 +145,23 @@ def fetch_newsapi(symbol, company_name, days_back=7):
         print(f"NewsAPI error: {e}")
         return []
 
-def get_news_sentiment(symbol, company_name):
+def get_news_sentiment(symbol, company_name, target_date=None):
     """Get recent news sentiment"""
-    print(f"\n{'='*70}\nFetching news for {symbol}\n{'='*70}")
+    date_str = target_date.strftime('%Y-%m-%d') if target_date else 'current'
+    print(f"\n{'='*70}\nFetching news for {symbol} (as of {date_str})\n{'='*70}")
     
     if not TRANSFORMERS_AVAILABLE:
-        print("   Sentiment analysis disabled (transformers not installed)")
-        print("   Install with: pip install transformers torch")
+        print("⚠ Sentiment analysis disabled (transformers not installed)")
+        print("  Install with: pip install transformers torch")
         return 0.0, []
     
     # Try NewsAPI first, fallback to Yahoo
-    articles = fetch_newsapi(symbol, company_name) if config["sentiment"]["use_real_api"] else []
+    articles = fetch_newsapi(symbol, company_name, target_date=target_date) if config["sentiment"]["use_real_api"] else []
     if not articles:
         articles = fetch_yahoo_news(symbol)
     
     if not articles:
-        print("   No articles found. Using neutral sentiment.")
+        print("⚠ No articles found. Using neutral sentiment.")
         return 0.0, []
     
     # Analyze sentiment
@@ -164,7 +186,7 @@ def get_news_sentiment(symbol, company_name):
         pos_pct = sum(1 for s in sentiments if s > 0.1) / len(sentiments) * 100
         neg_pct = sum(1 for s in sentiments if s < -0.1) / len(sentiments) * 100
         print(f"{'-'*70}")
-        print(f"  Average: {avg:+.3f} | Positive: {pos_pct:.0f}% | Negative: {neg_pct:.0f}%")
+        print(f"📊 Average: {avg:+.3f} | Positive: {pos_pct:.0f}% | Negative: {neg_pct:.0f}%")
         print(f"{'='*70}\n")
         return avg, sentiments
     return 0.0, []
@@ -175,17 +197,27 @@ try:
     company_name = ticker_obj.info.get('longName', config["data"]["symbol"])
 except:
     company_name = config["data"]["symbol"]
-print(f"  Analyzing: {company_name} ({config['data']['symbol']})")
+print(f"📈 Analyzing: {company_name} ({config['data']['symbol']})")
 
 # Download price data
 data = ticker_obj.history(period=config["data"]["period"])
+
+# Filter data up to target date
+target_date = config["data"]["target_date"]
+data = data[data.index <= target_date]
+
+if len(data) == 0:
+    print(f"❌ Error: No data available up to {target_date.strftime('%Y-%m-%d')}")
+    sys.exit(1)
+
 data_date = [date.strftime('%Y-%m-%d') for date in data.index]
 data_close_price = data['Close'].values
 num_data_points = len(data_date)
 print(f"Data points: {num_data_points} from {data_date[0]} to {data_date[-1]}")
+print(f"Training model as if today is: {data_date[-1]}")
 
 # Get sentiment
-current_sentiment, _ = get_news_sentiment(config["data"]["symbol"], company_name)
+current_sentiment, _ = get_news_sentiment(config["data"]["symbol"], company_name, config["data"]["target_date"])
 
 # Create sentiment time series (with realistic variation)
 baseline = current_sentiment
@@ -193,32 +225,6 @@ trend = np.linspace(-0.1, 0.1, num_data_points)
 noise = np.random.normal(0, 0.15, num_data_points)
 seasonal = 0.1 * np.sin(np.linspace(0, 4*np.pi, num_data_points))
 sentiment_data = np.clip(baseline + trend + noise + seasonal, -1, 1)
-
-# Plot price
-fig = figure(figsize=(25, 5), dpi=80)
-fig.patch.set_facecolor((1.0, 1.0, 1.0))
-plt.plot(data_date, data_close_price, color=config["plots"]["color_actual"])
-xticks = [data_date[i] if ((i%config["plots"]["xticks_interval"]==0 and (num_data_points-i) > config["plots"]["xticks_interval"]) or i==num_data_points-1) else None for i in range(num_data_points)]
-plt.xticks(np.arange(len(xticks)), xticks, rotation='vertical')
-plt.title(f"Price: {config['data']['symbol']}")
-plt.grid(which='major', axis='y', linestyle='--')
-plt.show()
-
-# Plot sentiment
-fig = figure(figsize=(25, 5), dpi=80)
-plt.plot(data_date, sentiment_data, color='purple', linewidth=2)
-plt.axhline(0, color='black', linestyle='--', alpha=0.3)
-plt.axhline(current_sentiment, color='red', linestyle=':', label=f'Current: {current_sentiment:.3f}')
-plt.fill_between(range(len(sentiment_data)), sentiment_data, 0, 
-                 where=(sentiment_data>0), color='green', alpha=0.2)
-plt.fill_between(range(len(sentiment_data)), sentiment_data, 0, 
-                 where=(sentiment_data<0), color='red', alpha=0.2)
-plt.xticks(np.arange(len(xticks)), xticks, rotation='vertical')
-plt.title(f"Sentiment: {config['data']['symbol']}")
-plt.ylabel("Sentiment (-1 to 1)")
-plt.grid()
-plt.legend()
-plt.show()
 
 # Normalizers
 class Normalizer():
@@ -267,6 +273,10 @@ class TimeSeriesDataset(Dataset):
 
 dataset_train = TimeSeriesDataset(data_x_train, data_y_train)
 dataset_val = TimeSeriesDataset(data_x_val, data_y_val)
+
+print("Train data shape", dataset_train.x.shape, dataset_train.y.shape)
+print("Validation data shape", dataset_val.x.shape, dataset_val.y.shape)
+
 train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=True)
 val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=True)
 
@@ -315,7 +325,7 @@ def run_epoch(dataloader, is_training=False):
             optimizer.step()
         epoch_loss += loss.detach().item() / x.shape[0]
     
-    return epoch_loss, scheduler.get_last_lr()[0]
+    return epoch_loss
 
 # Train
 model = LSTMModel(input_size=2, hidden_layer_size=config["model"]["lstm_size"],
@@ -324,14 +334,17 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"], betas=(0.9, 0.98), eps=1e-9)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=config["training"]["scheduler_step_size"], gamma=0.1)
 
-print("\n Training with price + sentiment...")
+print("\n🚀 Training with price + sentiment...")
 for epoch in range(config["training"]["num_epoch"]):
-    loss_train, lr = run_epoch(train_dataloader, True)
-    loss_val, _ = run_epoch(val_dataloader)
+    loss_train = run_epoch(train_dataloader, True)
+    loss_val = run_epoch(val_dataloader)
     scheduler.step()
-    print(f'Epoch[{epoch+1}/{config["training"]["num_epoch"]}] | train:{loss_train:.6f}, val:{loss_val:.6f} | lr:{lr:.6f}')
+    if epoch % 10 == 0:
+        print(f'Epoch[{epoch+1}/{config["training"]["num_epoch"]}] | train:{loss_train:.6f}, val:{loss_val:.6f}')
 
-# Predictions
+print("Model training complete")
+
+# Predictions on training/validation data
 model.eval()
 train_dataloader = DataLoader(dataset_train, batch_size=config["training"]["batch_size"], shuffle=False)
 val_dataloader = DataLoader(dataset_val, batch_size=config["training"]["batch_size"], shuffle=False)
@@ -341,212 +354,74 @@ predicted_train = np.concatenate([model(x.to(config["training"]["device"])).cpu(
 predicted_val = np.concatenate([model(x.to(config["training"]["device"])).cpu().detach().numpy() 
                                for x, _ in val_dataloader])
 
-# Calculate accuracy metrics
-def calculate_metrics(actual, predicted, scaler):
-    """Calculate comprehensive accuracy metrics"""
-    # Inverse transform to get actual prices
-    actual_prices = scaler.inverse_transform(actual)
-    predicted_prices = scaler.inverse_transform(predicted)
+# Save predicted vs actual validation data to CSV
+print("\nSaving predicted vs actual validation data to CSV...")
+validation_data = []
+val_start_index = split_index + config["data"]["window_size"]
+
+for i in range(len(predicted_val)):
+    validation_data.append({
+        'Date': data_date[val_start_index + i],
+        'Actual_Price': float(price_scaler.inverse_transform(np.array([[data_y_val[i]]]))[0][0]),
+        'Predicted_Price': float(price_scaler.inverse_transform(np.array([[predicted_val[i]]]))[0][0])
+    })
+
+validation_df = pd.DataFrame(validation_data)
+validation_df.to_csv('predicted_vs_actual_validation.csv', index=False)
+print("✓ Saved to: predicted_vs_actual_validation.csv")
+
+# Predict direction for next month
+print("\n🔮 Generating next month prediction...")
+model.eval()
+
+current_window = data_x_unseen.copy()
+predicted_prices = []
+
+trading_days_in_month = 22
+
+# Use the last sentiment value and maintain it for future predictions
+last_sentiment = normalized_sentiment[-1]
+
+for day in range(trading_days_in_month):
+    x = torch.tensor(current_window).float().to(config["training"]["device"]).unsqueeze(0)
+    with torch.no_grad():
+        predicted_normalized = model(x)
     
-    # Mean Absolute Error (MAE)
-    mae = np.mean(np.abs(actual_prices - predicted_prices))
+    predicted_normalized_np = predicted_normalized.cpu().detach().numpy()
+    if predicted_normalized_np.ndim == 0:
+        predicted_normalized_value = float(predicted_normalized_np)
+    else:
+        predicted_normalized_value = float(predicted_normalized_np[0])
     
-    # Mean Absolute Percentage Error (MAPE)
-    mape = np.mean(np.abs((actual_prices - predicted_prices) / actual_prices)) * 100
+    predicted_price = price_scaler.inverse_transform(np.array([[predicted_normalized_value]]))[0][0]
+    predicted_prices.append(predicted_price)
     
-    # Root Mean Squared Error (RMSE)
-    rmse = np.sqrt(np.mean((actual_prices - predicted_prices) ** 2))
-    
-    # R-squared (R²) - coefficient of determination
-    ss_res = np.sum((actual_prices - predicted_prices) ** 2)
-    ss_tot = np.sum((actual_prices - np.mean(actual_prices)) ** 2)
-    r2 = 1 - (ss_res / ss_tot)
-    
-    # Direction Accuracy (did we predict up/down correctly?)
-    actual_direction = np.diff(actual_prices) > 0
-    predicted_direction = np.diff(predicted_prices) > 0
-    direction_accuracy = np.mean(actual_direction == predicted_direction) * 100
-    
-    # Mean Percentage Error (MPE) - shows bias
-    mpe = np.mean((actual_prices - predicted_prices) / actual_prices) * 100
-    
-    return {
-        'MAE': mae,
-        'MAPE': mape,
-        'RMSE': rmse,
-        'R2': r2,
-        'Direction_Accuracy': direction_accuracy,
-        'MPE': mpe
-    }
+    # Update window with new prediction and maintain sentiment
+    new_row = np.array([predicted_normalized_value, last_sentiment])
+    current_window = np.vstack([current_window[1:], new_row])
 
-# Calculate metrics for train and validation sets
-print("\n" + "="*70)
-print("MODEL PERFORMANCE METRICS")
-print("="*70)
+last_actual_price = data_close_price[-1]
+predicted_price_end_month = predicted_prices[-1]
 
-train_metrics = calculate_metrics(data_y_train, predicted_train, price_scaler)
-val_metrics = calculate_metrics(data_y_val, predicted_val, price_scaler)
+price_change = predicted_price_end_month - last_actual_price
+price_change_percent = (price_change / last_actual_price) * 100
+direction = "up" if price_change > 0 else "down"
 
-print("\n TRAINING SET:")
-print(f"   MAE (Mean Absolute Error):        ${train_metrics['MAE']:.2f}")
-print(f"   MAPE (Mean Abs % Error):          {train_metrics['MAPE']:.2f}%")
-print(f"   RMSE (Root Mean Squared Error):   ${train_metrics['RMSE']:.2f}")
-print(f"   R² Score:                         {train_metrics['R2']:.4f} ({train_metrics['R2']*100:.2f}%)")
-print(f"   Direction Accuracy:               {train_metrics['Direction_Accuracy']:.2f}%")
-print(f"   MPE (Bias):                       {train_metrics['MPE']:.2f}%")
+print(f"Last actual price: ${last_actual_price:.2f}")
+print(f"Predicted price at end of next month: ${predicted_price_end_month:.2f}")
+print(f"Predicted change: ${price_change:.2f} ({price_change_percent:.2f}%)")
+print(f"Prediction: Stock will go {direction} in the next month")
 
-print("\n VALIDATION SET:")
-print(f"   MAE (Mean Absolute Error):        ${val_metrics['MAE']:.2f}")
-print(f"   MAPE (Mean Abs % Error):          {val_metrics['MAPE']:.2f}%")
-print(f"   RMSE (Root Mean Squared Error):   ${val_metrics['RMSE']:.2f}")
-print(f"   R² Score:                         {val_metrics['R2']:.4f} ({val_metrics['R2']*100:.2f}%)")
-print(f"   Direction Accuracy:               {val_metrics['Direction_Accuracy']:.2f}%")
-print(f"   MPE (Bias):                       {val_metrics['MPE']:.2f}%")
-
-print("\n INTERPRETATION:")
-print(f"   • MAPE {val_metrics['MAPE']:.1f}% means predictions are off by ~${val_metrics['MAE']:.2f} on average")
-print(f"   • R² of {val_metrics['R2']:.2%} means the model explains {val_metrics['R2']*100:.1f}% of price variance")
-print(f"   • Direction accuracy {val_metrics['Direction_Accuracy']:.1f}% = predicting up/down correctly")
-if abs(val_metrics['MPE']) > 2:
-    bias_dir = "overestimating" if val_metrics['MPE'] < 0 else "underestimating"
-    print(f"   • Model is slightly {bias_dir} prices by {abs(val_metrics['MPE']):.1f}%")
-else:
-    print(f"   • Model has minimal bias ({abs(val_metrics['MPE']):.1f}%)")
-
-print("="*70 + "\n")
-
-# Plot results
-to_plot_train = np.zeros(num_data_points)
-to_plot_val = np.zeros(num_data_points)
-ws = config["data"]["window_size"]
-to_plot_train[ws:split_index+ws] = price_scaler.inverse_transform(predicted_train)
-to_plot_val[split_index+ws:] = price_scaler.inverse_transform(predicted_val)
-to_plot_train = np.where(to_plot_train == 0, None, to_plot_train)
-to_plot_val = np.where(to_plot_val == 0, None, to_plot_val)
-
-fig = figure(figsize=(25, 5), dpi=80)
-plt.plot(data_date, data_close_price, label="Actual", color=config["plots"]["color_actual"])
-plt.plot(data_date, to_plot_train, label="Predicted (train)", color=config["plots"]["color_pred_train"])
-plt.plot(data_date, to_plot_val, label="Predicted (val)", color=config["plots"]["color_pred_val"])
-plt.title("Predictions with Real News Sentiment")
-plt.xticks(np.arange(len(xticks)), xticks, rotation='vertical')
-plt.grid()
-plt.legend()
-plt.show()
-
-# Visualize metrics comparison
-fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-fig.suptitle('Model Performance Metrics Comparison', fontsize=16, fontweight='bold')
-
-metrics_names = ['MAE ($)', 'MAPE (%)', 'RMSE ($)', 'R² Score', 'Direction Acc (%)', 'Bias (MPE %)']
-metrics_keys = ['MAE', 'MAPE', 'RMSE', 'R2', 'Direction_Accuracy', 'MPE']
-
-for idx, (ax, name, key) in enumerate(zip(axes.flat, metrics_names, metrics_keys)):
-    train_val = train_metrics[key]
-    val_val = val_metrics[key]
-    
-    bars = ax.bar(['Train', 'Validation'], [train_val, val_val], 
-                  color=['#3D9970', '#0074D9'], alpha=0.7, edgecolor='black')
-    ax.set_ylabel(name)
-    ax.set_title(name)
-    ax.grid(axis='y', alpha=0.3)
-    
-    # Add value labels on bars
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.2f}',
-                ha='center', va='bottom', fontweight='bold')
-    
-    # Special handling for R² (0-1 range)
-    if key == 'R2':
-        ax.set_ylim([0, 1])
-        ax.axhline(y=0.7, color='green', linestyle='--', alpha=0.5, label='Good (>0.7)')
-        ax.axhline(y=0.5, color='orange', linestyle='--', alpha=0.5, label='Fair (>0.5)')
-        ax.legend(fontsize=8)
-
-plt.tight_layout()
-plt.show()
-
-# Error distribution plot
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
-
-# Validation errors
-val_actual = price_scaler.inverse_transform(data_y_val)
-val_pred = price_scaler.inverse_transform(predicted_val)
-val_errors = val_actual - val_pred
-val_error_pct = (val_errors / val_actual) * 100
-
-ax1.hist(val_errors, bins=50, color='#0074D9', alpha=0.7, edgecolor='black')
-ax1.axvline(0, color='red', linestyle='--', linewidth=2, label='Zero Error')
-ax1.axvline(np.mean(val_errors), color='green', linestyle='--', linewidth=2, 
-            label=f'Mean: ${np.mean(val_errors):.2f}')
-ax1.set_xlabel('Prediction Error ($)', fontsize=12)
-ax1.set_ylabel('Frequency', fontsize=12)
-ax1.set_title('Distribution of Prediction Errors (Validation Set)', fontsize=14, fontweight='bold')
-ax1.legend()
-ax1.grid(alpha=0.3)
-
-ax2.hist(val_error_pct, bins=50, color='#0074D9', alpha=0.7, edgecolor='black')
-ax2.axvline(0, color='red', linestyle='--', linewidth=2, label='Zero Error')
-ax2.axvline(np.mean(val_error_pct), color='green', linestyle='--', linewidth=2, 
-            label=f'Mean: {np.mean(val_error_pct):.2f}%')
-ax2.set_xlabel('Prediction Error (%)', fontsize=12)
-ax2.set_ylabel('Frequency', fontsize=12)
-ax2.set_title('Distribution of Percentage Errors (Validation Set)', fontsize=14, fontweight='bold')
-ax2.legend()
-ax2.grid(alpha=0.3)
-
-plt.tight_layout()
-plt.show()
-
-# Next day prediction
-x = torch.tensor(data_x_unseen).float().unsqueeze(0)
-next_day_pred = model(x).cpu().detach().numpy()[0]
-next_day_price = price_scaler.inverse_transform(np.array([[next_day_pred]]))[0][0]
-
-print(f"\n{'='*70}")
-print(f"PREDICTION RESULTS (with FinBERT Sentiment)")
-print(f"{'='*70}")
-print(f"Current price: ${data_close_price[-1]:.2f}")
-print(f"Next day prediction: ${next_day_price:.2f}")
-print(f"Current sentiment: {current_sentiment:+.3f} ({'Positive' if current_sentiment>0 else 'Negative'})")
-print(f"{'='*70}\n")
-
-# Save results with metrics
-val_dates = data_date[split_index+ws:]
-results_df = pd.DataFrame({
-    'Date': val_dates,
-    'Actual': price_scaler.inverse_transform(data_y_val),
-    'Predicted': price_scaler.inverse_transform(predicted_val),
-    'Error': price_scaler.inverse_transform(data_y_val) - price_scaler.inverse_transform(predicted_val),
-    'Error_Percent': ((price_scaler.inverse_transform(data_y_val) - price_scaler.inverse_transform(predicted_val)) 
-                      / price_scaler.inverse_transform(data_y_val) * 100)
+prediction_df = pd.DataFrame({
+    'Day': range(1, trading_days_in_month + 1),
+    'Predicted_Price': predicted_prices
 })
-results_df.to_csv('predictions_with_sentiment.csv', index=False)
+prediction_df.to_csv('next_month_prediction.csv', index=False)
+print("✓ Saved to: next_month_prediction.csv")
 
-# Save metrics summary
-metrics_df = pd.DataFrame({
-    'Metric': ['MAE', 'MAPE', 'RMSE', 'R2_Score', 'Direction_Accuracy', 'MPE'],
-    'Train': [train_metrics['MAE'], train_metrics['MAPE'], train_metrics['RMSE'], 
-              train_metrics['R2'], train_metrics['Direction_Accuracy'], train_metrics['MPE']],
-    'Validation': [val_metrics['MAE'], val_metrics['MAPE'], val_metrics['RMSE'], 
-                   val_metrics['R2'], val_metrics['Direction_Accuracy'], val_metrics['MPE']]
+direction_df = pd.DataFrame({
+    'Direction': [direction]
 })
-metrics_df.to_csv('model_metrics.csv', index=False)
-
-pd.DataFrame({
-    'Next_Day_Price': [next_day_price],
-    'Current_Price': [data_close_price[-1]],
-    'Price_Change': [next_day_price - data_close_price[-1]],
-    'Percent_Change': [(next_day_price - data_close_price[-1]) / data_close_price[-1] * 100],
-    'Current_Sentiment': [current_sentiment],
-    'Direction': ['up' if next_day_price > data_close_price[-1] else 'down'],
-    'Model_MAPE': [val_metrics['MAPE']],
-    'Model_Direction_Accuracy': [val_metrics['Direction_Accuracy']]
-}).to_csv('next_day_prediction.csv', index=False)
-
-print("✓ Results saved:")
-print("  • predictions_with_sentiment.csv (detailed predictions)")
-print("  • model_metrics.csv (performance metrics)")
-print("  • next_day_prediction.csv (tomorrow's forecast)")
+direction_df.to_csv('stock_direction_prediction.csv', index=False)
+print(f"✓ Saved direction prediction to: stock_direction_prediction.csv")
+print(f"📊 Direction: {direction}")
