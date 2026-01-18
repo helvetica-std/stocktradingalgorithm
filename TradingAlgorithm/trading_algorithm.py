@@ -226,7 +226,7 @@ for epoch in range(config["training"]["num_epoch"]):
 
     scheduler.step()
 
-    if epoch % 10 == 0:
+    if epoch % 1 == 0:
         print('Epoch[{}/{}] | loss train:{:.6f}, test:{:.6f}'.format(epoch, config["training"]["num_epoch"], loss_train, loss_val))
 
 print("Model training complete")
