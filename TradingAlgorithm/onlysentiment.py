@@ -1,9 +1,10 @@
 import os
 import sys
-import datetime
-import requests
+import csv
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 
+import requests
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -29,7 +30,7 @@ model.to(DEVICE)
 model.eval()
 
 # =========================
-# NEWS FETCHING (RAW REST)
+# NEWS FETCHING
 # =========================
 
 def fetch_news(ticker: str, days: int = 7) -> List[Dict]:
@@ -37,7 +38,7 @@ def fetch_news(ticker: str, days: int = 7) -> List[Dict]:
     if not api_key:
         raise RuntimeError("NEWSAPI_KEY not set")
 
-    from_date = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    from_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
 
     params = {
         "q": ticker,
@@ -99,22 +100,72 @@ def analyze_articles(articles: List[Dict]) -> List[Dict]:
     return results
 
 # =========================
-# SUMMARY
+# SUMMARY + RANKING
 # =========================
 
-def summarize_sentiment(results: List[Dict]) -> Dict:
-    counts = {"positive": 0, "neutral": 0, "negative": 0}
-    for r in results:
-        counts[r["sentiment"]] += 1
+def summarize_percentages(results: List[Dict]) -> Dict:
+    total = len(results)
+    if total == 0:
+        return {"positive_pct": 0.0, "negative_pct": 0.0, "neutral_pct": 0.0}
 
-    total = sum(counts.values())
-    overall = max(counts, key=counts.get) if total else "neutral"
+    pos = sum(1 for r in results if r["sentiment"] == "positive")
+    neg = sum(1 for r in results if r["sentiment"] == "negative")
+    neu = sum(1 for r in results if r["sentiment"] == "neutral")
 
     return {
-        "total_articles": total,
-        "breakdown": counts,
-        "overall_sentiment": overall
+        "positive_pct": round(pos / total * 100, 1),
+        "negative_pct": round(neg / total * 100, 1),
+        "neutral_pct": round(neu / total * 100, 1),
     }
+
+def get_top_articles(results: List[Dict], top_n: int = 5) -> List[Dict]:
+    return sorted(
+        results,
+        key=lambda r: r["scores"]["positive"],
+        reverse=True
+    )[:top_n]
+
+# =========================
+# CSV EXPORT
+# =========================
+
+def save_results_to_csv(ticker: str, results: Dict, output_dir: str = "outputs") -> str:
+    os.makedirs(output_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{ticker}_sentiment_{timestamp}.csv"
+    filepath = os.path.join(output_dir, filename)
+
+    fieldnames = [
+        "ticker",
+        "timestamp",
+        "title",
+        "source",
+        "url",
+        "sentiment",
+        "positive_score",
+        "neutral_score",
+        "negative_score",
+    ]
+
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for a in results["all_articles"]:
+            writer.writerow({
+                "ticker": ticker,
+                "timestamp": timestamp,
+                "title": a["title"],
+                "source": a["source"],
+                "url": a["url"],
+                "sentiment": a["sentiment"],
+                "positive_score": round(a["scores"]["positive"], 4),
+                "neutral_score": round(a["scores"]["neutral"], 4),
+                "negative_score": round(a["scores"]["negative"], 4),
+            })
+
+    return filepath
 
 # =========================
 # ENTRY POINT
@@ -126,11 +177,24 @@ def run_analysis(ticker: str) -> Dict:
 
     return {
         "ticker": ticker,
-        "summary": summarize_sentiment(analyzed),
-        "articles": analyzed
+        "overall_percentages": summarize_percentages(analyzed),
+        "top_articles": get_top_articles(analyzed),
+        "all_articles": analyzed
     }
 
 if __name__ == "__main__":
     ticker = sys.argv[1] if len(sys.argv) > 1 else "IBM"
     result = run_analysis(ticker)
-    print(result["summary"])
+
+    csv_path = save_results_to_csv(ticker, result)
+
+    print("\nOverall Sentiment (%)")
+    print("=====================")
+    print(result["overall_percentages"])
+
+    print("\nTop Articles")
+    print("============")
+    for a in result["top_articles"]:
+        print(f"[{a['sentiment'].upper()}] {a['title']}")
+
+    print(f"\nCSV saved to: {csv_path}")
