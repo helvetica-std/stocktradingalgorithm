@@ -4,6 +4,11 @@ import csv
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 
+# Fix Unicode encoding issues on Windows
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import requests
 import torch
 import torch.nn.functional as F
@@ -191,6 +196,10 @@ if __name__ == "__main__":
     print("\nTop Articles")
     print("============")
     for a in result["top_articles"]:
-        print(f"[{a['sentiment'].upper()}] {a['title']}")
+        try:
+            print(f"[{a['sentiment'].upper()}] {a['title']}")
+        except UnicodeEncodeError:
+            # Handle special characters on Windows console
+            print(f"[{a['sentiment'].upper()}] {a['title'].encode('utf-8', errors='ignore').decode('utf-8')}")
 
     print(f"\nCSV saved to: {csv_path}")

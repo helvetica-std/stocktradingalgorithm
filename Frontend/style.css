@@ -223,6 +223,20 @@ body {
     transform: translateX(4px);
 }
 
+/* Chart Title */
+.chart-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin-bottom: 1rem;
+    margin-top: 2rem;
+    letter-spacing: 0.5px;
+}
+
+.chart-title:first-of-type {
+    margin-top: 0;
+}
+
 /* Chart Container */
 .chart-container {
     background: rgba(15, 23, 42, 0.8);
@@ -232,6 +246,203 @@ body {
     padding: 2rem;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     overflow-x: auto;
+}
+
+/* Sentiment Container */
+.sentiment-container {
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 16px;
+    padding: 2rem;
+    margin-top: 3rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+}
+
+.sentiment-container:hover {
+    border-color: rgba(148, 163, 184, 0.25);
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
+}
+
+.sentiment-header {
+    margin-bottom: 2rem;
+}
+
+.sentiment-header h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 0.5rem;
+}
+
+.sentiment-ticker {
+    font-size: 0.95rem;
+    color: #94a3b8;
+    font-weight: 400;
+}
+
+/* Sentiment Content */
+.sentiment-content {
+    display: flex;
+    gap: 3rem;
+    align-items: center;
+    margin-bottom: 3rem;
+    flex-wrap: wrap;
+}
+
+.sentiment-chart {
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    justify-content: center;
+}
+
+.sentiment-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    flex: 1;
+    min-width: 250px;
+}
+
+.sentiment-stat {
+    padding: 1.5rem;
+    border-radius: 12px;
+    border-left: 4px solid;
+    background: rgba(30, 41, 59, 0.6);
+    transition: all 0.3s ease;
+}
+
+.sentiment-stat:hover {
+    transform: translateX(8px);
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.sentiment-stat.positive {
+    border-left-color: #10b981;
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+.sentiment-stat.neutral {
+    border-left-color: #6b7280;
+    box-shadow: 0 0 20px rgba(107, 114, 128, 0.15);
+}
+
+.sentiment-stat.negative {
+    border-left-color: #ef4444;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+.stat-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.75rem;
+}
+
+.stat-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.sentiment-stat.positive .stat-value {
+    color: #10b981;
+}
+
+.sentiment-stat.neutral .stat-value {
+    color: #6b7280;
+}
+
+.sentiment-stat.negative .stat-value {
+    color: #ef4444;
+}
+
+/* Top Articles */
+.top-articles {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.articles-header {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 1.5rem;
+}
+
+.article-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.25rem;
+    border-radius: 10px;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    margin-bottom: 1rem;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.article-item:hover {
+    background: rgba(30, 41, 59, 0.8);
+    border-color: rgba(148, 163, 184, 0.25);
+    transform: translateX(4px);
+}
+
+.article-badge {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+    min-width: 80px;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+
+.sentiment-positive .article-badge {
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.sentiment-neutral .article-badge {
+    background: rgba(107, 114, 128, 0.2);
+    color: #6b7280;
+    border: 1px solid rgba(107, 114, 128, 0.4);
+}
+
+.sentiment-negative .article-badge {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.article-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.article-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin-bottom: 0.5rem;
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+.article-source {
+    font-size: 0.85rem;
+    color: #64748b;
 }
 
 #chart-wrapper {
@@ -285,7 +496,8 @@ body {
     }
 
     .controls-card,
-    .chart-container {
+    .chart-container,
+    .sentiment-container {
         padding: 1.5rem;
     }
 
@@ -313,6 +525,19 @@ body {
 
     .controls-header h2 {
         font-size: 1.25rem;
+    }
+
+    .sentiment-content {
+        flex-direction: column;
+        gap: 2rem;
+    }
+
+    .sentiment-chart {
+        min-width: 100%;
+    }
+
+    .sentiment-stats {
+        width: 100%;
     }
 
     .logo-section {
@@ -356,9 +581,32 @@ body {
     }
 
     .controls-card,
-    .chart-container {
+    .chart-container,
+    .sentiment-container {
         padding: 1rem;
         border-radius: 12px;
+    }
+
+    .sentiment-header h2 {
+        font-size: 1.25rem;
+    }
+
+    .sentiment-content {
+        gap: 1.5rem;
+    }
+
+    .stat-value {
+        font-size: 2rem;
+    }
+
+    .article-title {
+        font-size: 0.85rem;
+    }
+
+    .article-badge {
+        font-size: 0.7rem;
+        padding: 0.4rem 0.8rem;
+        min-width: 70px;
     }
 }
 
